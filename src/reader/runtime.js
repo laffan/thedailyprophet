@@ -150,6 +150,82 @@
     })();
   }
 
+  /* ---- late lifecycle shims ---------------------------------------------
+     Replayed bundler chunks execute asynchronously and often finish AFTER
+     the document's DOMContentLoaded/load events have fired. Code inside
+     them that does addEventListener("load", startAnimations) would wait
+     forever — online it loaded before those events, so it never noticed.
+     If the moment has already passed, run the listener now. */
+
+  var lifecycleFired = { DOMContentLoaded: false, load: false };
+  document.addEventListener("DOMContentLoaded", function () { lifecycleFired.DOMContentLoaded = true; }, true);
+  window.addEventListener("load", function () { lifecycleFired.load = true; }, true);
+  if (document.readyState === "interactive") lifecycleFired.DOMContentLoaded = true;
+  if (document.readyState === "complete") { lifecycleFired.DOMContentLoaded = true; lifecycleFired.load = true; }
+
+  function lateInvoke(listener, type, target) {
+    setTimeout(function () {
+      try {
+        var cb = typeof listener === "function"
+          ? listener
+          : listener && typeof listener.handleEvent === "function"
+            ? function (ev) { return listener.handleEvent(ev); }
+            : null;
+        if (!cb) return;
+        var ev;
+        try { ev = new Event(type); } catch (e) { ev = { type: type, target: target }; }
+        cb.call(target, ev);
+      } catch (e) {}
+    }, 0);
+  }
+
+  function missedLifecycleEvent(type) {
+    if (type === "DOMContentLoaded") return lifecycleFired.DOMContentLoaded;
+    if (type === "load" || type === "pageshow") return lifecycleFired.load;
+    return false;
+  }
+
+  [window, document].forEach(function (target) {
+    try {
+      var orig = target.addEventListener;
+      target.addEventListener = function (type, listener, opts) {
+        try {
+          if (listener && missedLifecycleEvent(String(type))) {
+            lateInvoke(listener, String(type), target);
+            return;
+          }
+        } catch (e) {}
+        return orig.call(target, type, listener, opts);
+      };
+    } catch (e) {}
+  });
+
+  try {
+    var winProto = Object.getPrototypeOf(window);
+    var onloadDesc =
+      Object.getOwnPropertyDescriptor(window, "onload") ||
+      (winProto && Object.getOwnPropertyDescriptor(winProto, "onload"));
+    Object.defineProperty(window, "onload", {
+      configurable: true,
+      get: function () {
+        try { return onloadDesc && onloadDesc.get ? onloadDesc.get.call(window) : null; } catch (e) { return null; }
+      },
+      set: function (f) {
+        if (lifecycleFired.load && typeof f === "function") lateInvoke(f, "load", window);
+        else if (onloadDesc && onloadDesc.set) { try { onloadDesc.set.call(window, f); } catch (e) {} }
+      },
+    });
+  } catch (e) {}
+
+  // Layout-dependent animation libraries commonly re-measure on resize and
+  // arm on the first scroll; give them one nudge once everything settled.
+  window.addEventListener("load", function () {
+    setTimeout(function () {
+      try { window.dispatchEvent(new Event("resize")); } catch (e) {}
+      try { window.dispatchEvent(new Event("scroll")); } catch (e) {}
+    }, 150);
+  });
+
   /* ---- offline replay vault ---------------------------------------------
      The capture toolkit recorded every network response the page consumed
      and embedded them in <script type="application/json" id="prophet-vault">.
@@ -409,6 +485,22 @@
       } catch (e) {}
     });
 
+    // Dynamically-inserted stylesheet chunks (webpack CSS splitting).
+    (function () {
+      if (!window.HTMLLinkElement) return;
+      var proto = window.HTMLLinkElement.prototype;
+      var desc = Object.getOwnPropertyDescriptor(proto, "href");
+      if (!desc || !desc.set) return;
+      try {
+        Object.defineProperty(proto, "href", {
+          configurable: true,
+          enumerable: desc.enumerable,
+          get: desc.get,
+          set: function (v) { desc.set.call(this, mapUrl(this, String(v), "text/css")); },
+        });
+      } catch (e) {}
+    })();
+
     try {
       Element.prototype.getAttribute = function (name) {
         if (name != null && String(name).toLowerCase() === "src" && isScriptEl(this)) {
@@ -418,10 +510,15 @@
         return origGetAttribute.call(this, name);
       };
       Element.prototype.setAttribute = function (name, value) {
-        if (name != null && String(name).toLowerCase() === "src") {
-          if (isScriptEl(this)) value = mapUrl(this, String(value), "text/javascript");
-          else if (this.tagName && String(this.tagName).toUpperCase() === "IMG") {
-            value = mapUrl(this, String(value), "image/png");
+        if (name != null) {
+          var n = String(name).toLowerCase();
+          if (n === "src") {
+            if (isScriptEl(this)) value = mapUrl(this, String(value), "text/javascript");
+            else if (this.tagName && String(this.tagName).toUpperCase() === "IMG") {
+              value = mapUrl(this, String(value), "image/png");
+            }
+          } else if (n === "href" && this.tagName && String(this.tagName).toUpperCase() === "LINK") {
+            value = mapUrl(this, String(value), "text/css");
           }
         }
         return origSetAttribute.call(this, name, value);

@@ -37,6 +37,15 @@
     invoke("capture_progress", { stage: stage, detail: detail || null }).catch(function () {});
   }
 
+  // The resource-timing buffer defaults to ~250 entries; big pages load far
+  // more, and every entry lost is a script/data file missing from the vault.
+  try {
+    performance.setResourceTimingBufferSize(50000);
+    performance.addEventListener("resourcetimingbufferfull", function () {
+      try { performance.setResourceTimingBufferSize(100000); } catch (e) {}
+    });
+  } catch (e) {}
+
   function reportPage() {
     invoke("capture_page_info", { title: document.title || "", url: location.href }).catch(function () {});
   }
@@ -942,7 +951,7 @@
         }
       }
     } catch (e) {}
-    return urls.slice(0, 240);
+    return urls.slice(0, 800);
   }
 
   function buildVault(opts) {
