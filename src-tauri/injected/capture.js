@@ -1,11 +1,22 @@
 /*
  * The Daily Prophet — capture toolkit.
- * Injected into every page of the "capture" webview as a Tauri
- * initialization script. Stays dormant until the main window drives it
- * through window.__PROPHET_CAPTURE__ (via WebviewWindow::eval).
+ * Injected into every page of the embedded "capture" webview as a Tauri
+ * initialization script (document-start). Two responsibilities:
  *
- * IPC back to Rust uses window.__TAURI_INTERNALS__.invoke, which is
- * available here because the `capture` window has a remote-URL capability.
+ *  1. RECORDER (always on): patches fetch/XMLHttpRequest from the very first
+ *     moment so every network response the page consumes — article data,
+ *     chart JSON, lazy script chunks — is captured with the user's session.
+ *     At snapshot time this becomes the "vault" embedded in the snapshot;
+ *     the reader runtime replays it so interactive pieces work offline
+ *     exactly like they did online.
+ *
+ *  2. CAPTURE API (dormant until driven): clean-up overlay + single-file
+ *     snapshot serializer, controlled from the main window through
+ *     window.__PROPHET_CAPTURE__ (via Webview::eval).
+ *
+ * IPC back to Rust uses window.__TAURI_INTERNALS__.invoke, available here
+ * because the capture webview has a remote-URL capability granting the six
+ * capture_* reporting commands.
  */
 (function () {
   "use strict";
@@ -33,6 +44,184 @@
   document.addEventListener("DOMContentLoaded", reportPage);
   window.addEventListener("load", reportPage);
   window.addEventListener("popstate", function () { setTimeout(reportPage, 150); });
+
+  function absUrl(raw, base) {
+    try {
+      return new URL(raw, base || document.baseURI).href;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function hashStr(s) {
+    var h = 5381;
+    for (var i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+    return h.toString(36);
+  }
+
+  function noop() {}
+
+  /* ================= dynamic-node tracker =================
+     Nodes inserted by scripts AFTER parsing (charts, widgets, lazy chunks)
+     are tracked from document-start. For scripts-on snapshots they are
+     stripped: the re-running scripts rebuild them from the vault — exactly
+     what happens when the page is reloaded online. Keeping them would make
+     append-style renderers (d3 et al) draw everything twice. */
+
+  var DYNAMIC = (typeof WeakSet !== "undefined") ? new WeakSet() : null;
+  if (DYNAMIC) {
+    try {
+      new MutationObserver(function (muts) {
+        if (document.readyState === "loading") return; // parser inserts
+        for (var i = 0; i < muts.length; i++) {
+          var added = muts[i].addedNodes;
+          for (var j = 0; j < added.length; j++) {
+            if (added[j].nodeType === 1) DYNAMIC.add(added[j]);
+          }
+        }
+      }).observe(document, { childList: true, subtree: true }); // documentElement doesn't exist yet at document-start
+    } catch (e) {
+      DYNAMIC = null;
+    }
+  }
+
+  /** Decide whether stripping dynamic nodes is safe: on app-rendered pages
+      (SPAs, hydration shells) nearly everything is "dynamic" and stripping
+      would blank the article — keep the DOM there instead. */
+  function planDynamicStrip() {
+    if (!DYNAMIC || !document.body) return false;
+    var all = document.body.querySelectorAll("*");
+    if (!all.length) return false;
+    var derived = new WeakSet();
+    var dynCount = 0;
+    for (var i = 0; i < all.length; i++) {
+      var el = all[i];
+      if (DYNAMIC.has(el) || (el.parentElement && derived.has(el.parentElement))) {
+        derived.add(el);
+        dynCount++;
+      }
+    }
+    var ratio = dynCount / all.length;
+    progress(
+      "Script-generated content",
+      dynCount + " of " + all.length + " elements" + (ratio <= 0.4 ? " — will be rebuilt by scripts" : " — app-rendered page, keeping DOM"),
+    );
+    return ratio <= 0.4;
+  }
+
+  /* ================= network recorder =================
+     Records successful responses so the snapshot can replay them offline.
+     Key format (must match the reader runtime's lookup):
+       GET  -> "GET <absolute-url>"
+       POST -> "POST <absolute-url> <djb2-of-body>" (small string bodies)   */
+
+  var RECORDER = {
+    active: true,
+    entries: new Map(), // key -> { u, s, t, buf }
+    budget: 64 * 1024 * 1024,
+    perResource: 8 * 1024 * 1024,
+  };
+
+  function recorderKey(method, url, body) {
+    var k = method + " " + url;
+    if (method !== "GET" && typeof body === "string" && body.length > 0 && body.length < 4096) {
+      k += " " + hashStr(body);
+    }
+    return k;
+  }
+
+  function recorderPut(key, url, status, mime, buf) {
+    if (!RECORDER.active || !buf) return;
+    if (RECORDER.entries.has(key)) return;
+    var size = buf.byteLength;
+    if (size === 0 || size > RECORDER.perResource || size > RECORDER.budget) return;
+    RECORDER.budget -= size;
+    RECORDER.entries.set(key, { u: url, s: status, t: mime || "", buf: buf });
+  }
+
+  // ---- fetch ----
+  var origFetch = window.fetch ? window.fetch.bind(window) : null;
+  if (origFetch) {
+    window.fetch = function (input, init) {
+      var p = origFetch(input, init);
+      try {
+        var method = ((init && init.method) || (input && input.method) || "GET").toUpperCase();
+        var raw = typeof input === "string" ? input : input && input.url ? input.url : String(input);
+        var abs = absUrl(raw);
+        var body = init && typeof init.body === "string" ? init.body : null;
+        if (RECORDER.active && abs && /^https?:/i.test(abs) && (method === "GET" || method === "POST")) {
+          p.then(function (resp) {
+            try {
+              if (!resp || !resp.ok || resp.type === "opaque") return;
+              var mime = (resp.headers.get("content-type") || "").split(";")[0].trim();
+              var clone = resp.clone();
+              clone
+                .arrayBuffer()
+                .then(function (buf) {
+                  recorderPut(recorderKey(method, abs, body), abs, resp.status, mime, buf);
+                })
+                .catch(noop);
+            } catch (e) {}
+          }).catch(noop);
+        }
+      } catch (e) {}
+      return p;
+    };
+  }
+
+  // ---- XMLHttpRequest ----
+  var RealXHR = window.XMLHttpRequest;
+  if (RealXHR) {
+    var WrappedXHR = function () {
+      var xhr = new RealXHR();
+      var meta = { m: "GET", u: "" };
+      var origOpen = xhr.open;
+      xhr.open = function (m, u) {
+        meta.m = String(m || "GET").toUpperCase();
+        meta.u = absUrl(String(u)) || "";
+        return origOpen.apply(xhr, arguments);
+      };
+      var origSend = xhr.send;
+      xhr.send = function (body) {
+        if (RECORDER.active && meta.u && /^https?:/i.test(meta.u)) {
+          var bodyStr = typeof body === "string" ? body : null;
+          xhr.addEventListener("load", function () {
+            try {
+              if (xhr.status < 200 || xhr.status >= 300) return;
+              var mime = "";
+              try {
+                mime = (xhr.getResponseHeader("content-type") || "").split(";")[0].trim();
+              } catch (e) {}
+              var url = xhr.responseURL || meta.u;
+              var key = recorderKey(meta.m, url, bodyStr);
+              var rt = xhr.responseType;
+              if (rt === "" || rt === "text") {
+                recorderPut(key, url, xhr.status, mime, new TextEncoder().encode(xhr.responseText).buffer);
+              } else if (rt === "arraybuffer" && xhr.response) {
+                recorderPut(key, url, xhr.status, mime, xhr.response.slice(0));
+              } else if (rt === "json" && xhr.response != null) {
+                recorderPut(key, url, xhr.status, mime, new TextEncoder().encode(JSON.stringify(xhr.response)).buffer);
+              } else if (rt === "blob" && xhr.response) {
+                xhr.response
+                  .arrayBuffer()
+                  .then(function (buf) {
+                    recorderPut(key, url, xhr.status, mime, buf);
+                  })
+                  .catch(noop);
+              }
+            } catch (e) {}
+          });
+        }
+        return origSend.apply(xhr, arguments);
+      };
+      return xhr;
+    };
+    WrappedXHR.prototype = RealXHR.prototype;
+    ["UNSENT", "OPENED", "HEADERS_RECEIVED", "LOADING", "DONE"].forEach(function (name, i) {
+      WrappedXHR[name] = i;
+    });
+    window.XMLHttpRequest = WrappedXHR;
+  }
 
   /* ================= clean-up mode ================= */
 
@@ -140,7 +329,6 @@
       e.stopImmediatePropagation();
       cleanup.level++;
       var el = currentTarget();
-      // clamp: currentTarget stops at body
       if (el === document.body) cleanup.level--;
       positionBox();
     } else if (e.key === "ArrowDown") {
@@ -161,7 +349,7 @@
     host.style.cssText = "all:initial; position:fixed; z-index:2147483647; top:0; left:0;";
     var shadow = host.attachShadow({ mode: "open" });
     shadow.innerHTML =
-      '<style>' +
+      "<style>" +
       ".box{position:fixed;display:none;pointer-events:none;border:2px solid #c0392b;background:rgba(192,57,43,0.12);border-radius:3px;z-index:2}" +
       ".label{position:fixed;display:none;pointer-events:none;background:#c0392b;color:#fff;font:11px/1.6 -apple-system,Helvetica,sans-serif;padding:1px 7px;border-radius:3px;z-index:3;max-width:60vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}" +
       ".bar{position:fixed;top:12px;right:12px;z-index:4;display:flex;gap:8px;align-items:center;background:#231d13;color:#f2e8d5;font:12.5px -apple-system,Helvetica,sans-serif;padding:9px 12px;border-radius:9px;box-shadow:0 6px 18px rgba(0,0,0,.35)}" +
@@ -194,17 +382,9 @@
 
   var BUDGET_TOTAL = 120 * 1024 * 1024; // stop inlining after this many bytes
   var PER_RESOURCE_CAP = 30 * 1024 * 1024;
-  var resourceCache = new Map(); // absolute url -> { dataUri, bytes } | null
+  var resourceCache = new Map(); // absolute url -> { dataUri, mime, buf, bytes } | null | Promise
   var budgetLeft = BUDGET_TOTAL;
   var fetchedCount = 0;
-
-  function absUrl(raw, base) {
-    try {
-      return new URL(raw, base || document.baseURI).href;
-    } catch (e) {
-      return null;
-    }
-  }
 
   function bytesToB64(buf) {
     var bytes = new Uint8Array(buf);
@@ -229,7 +409,7 @@
     return map[(m || "").toLowerCase()] || "application/octet-stream";
   }
 
-  /** Fetch a resource as { dataUri, text, bytes } or null. Page fetch first, Rust fallback. */
+  /** Fetch a resource as { dataUri, mime, buf, bytes } or null. Page fetch first, Rust fallback. */
   function fetchResource(url) {
     if (resourceCache.has(url)) return Promise.resolve(resourceCache.get(url));
     if (!/^https?:/i.test(url)) {
@@ -241,7 +421,7 @@
       resourceCache.set(url, null);
       return Promise.resolve(null);
     }
-    var p = fetch(url, { credentials: "include", redirect: "follow" })
+    var p = (origFetch || window.fetch)(url, { credentials: "include", redirect: "follow" })
       .then(function (resp) {
         if (!resp.ok || resp.type === "opaque") throw new Error("http " + resp.status);
         return resp.arrayBuffer().then(function (buf) {
@@ -393,6 +573,14 @@
 
     // Skip subtrees the user removed or our own UI.
     if (live.getAttribute && (live.getAttribute(UI_ATTR) || live.getAttribute(REMOVED_ATTR))) {
+      if (clone.parentNode) clone.parentNode.removeChild(clone);
+      return;
+    }
+
+    // Script-created nodes: the re-running scripts rebuild them (vault-fed).
+    // Dynamically-inserted <script> tags are ALWAYS dropped in scripts-on
+    // mode — the code that inserted them once will insert them again.
+    if (opts.includeScripts && DYNAMIC && DYNAMIC.has(live) && (opts.stripDynamic || tag === "SCRIPT")) {
       if (clone.parentNode) clone.parentNode.removeChild(clone);
       return;
     }
@@ -651,11 +839,25 @@
     if (!src) return;
     var abs = absUrl(src);
     if (!abs) return;
+    var type2 = (live.getAttribute("type") || "").toLowerCase();
     clone.setAttribute("data-prophet-src", abs);
+    if (type2 === "module") {
+      // Parser-inserted module scripts would fetch their src before the
+      // reader runtime could intercept them. Defuse the type; the runtime
+      // revives them from the vault as blob: URLs at load time.
+      clone.setAttribute("type", "prophet/module");
+      clone.setAttribute("src", abs);
+      jobs.push(function () {
+        return fetchResource(abs).then(function (r) {
+          if (r && r.buf) recorderPutForce("GET " + abs, abs, 200, r.mime, r.buf);
+        });
+      });
+      return;
+    }
     jobs.push(function () {
       return fetchText(abs).then(function (txt) {
         if (txt == null) {
-          clone.setAttribute("src", abs); // dead offline, but preserved
+          clone.setAttribute("src", abs); // reader runtime may still find it in the vault
           return;
         }
         clone.removeAttribute("src");
@@ -664,6 +866,14 @@
         clone.textContent = txt.replace(/<\/script/gi, "<\\/script");
       });
     });
+  }
+
+  // Vault writes during snapshot bypass the "recorder paused" flag.
+  function recorderPutForce(key, url, status, mime, buf) {
+    var was = RECORDER.active;
+    RECORDER.active = true;
+    recorderPut(key, url, status, mime, buf);
+    RECORDER.active = was;
   }
 
   function stripDangerous(rootClone, opts) {
@@ -711,6 +921,67 @@
     var lanes = [];
     for (var l = 0; l < concurrency; l++) lanes.push(next());
     return Promise.all(lanes);
+  }
+
+  /* ---- offline replay vault ------------------------------------------- */
+
+  /** URLs the page loaded that the recorder couldn't see (script tags,
+      pre-recorder requests). Sourced from the performance timeline. */
+  function sweepResourceUrls() {
+    var urls = [];
+    var seen = {};
+    try {
+      var entries = performance.getEntriesByType("resource");
+      for (var i = 0; i < entries.length; i++) {
+        var e = entries[i];
+        if (!/^https?:/i.test(e.name)) continue;
+        if (seen[e.name]) continue;
+        if (RECORDER.entries.has("GET " + e.name)) continue;
+        var it = e.initiatorType;
+        if (it === "script" || it === "fetch" || it === "xmlhttprequest" || it === "other" || it === "img") {
+          seen[e.name] = true;
+          urls.push(e.name);
+        }
+      }
+    } catch (e) {}
+    return urls.slice(0, 240);
+  }
+
+  function buildVault(opts) {
+    if (!opts.includeScripts) return Promise.resolve(null);
+    var urls = sweepResourceUrls();
+    progress("Recording offline replay data", urls.length + " extra resources");
+    return Promise.all(
+      urls.map(function (u) {
+        return fetchResource(u).then(function (r) {
+          if (r && r.buf) recorderPutForce("GET " + u, u, 200, r.mime, r.buf);
+        });
+      }),
+    ).then(function () {
+      var arr = [];
+      RECORDER.entries.forEach(function (v, k) {
+        arr.push({ k: k, u: v.u, s: v.s, t: v.t, b: bytesToB64(v.buf), _size: v.buf.byteLength });
+      });
+      // Keep the vault under ~48MB of raw payload; drop the biggest first.
+      var MAX_VAULT = 48 * 1024 * 1024;
+      var total = arr.reduce(function (acc, e) { return acc + e._size; }, 0);
+      if (total > MAX_VAULT) {
+        arr.sort(function (a, b) { return a._size - b._size; });
+        var kept = [];
+        var acc = 0;
+        for (var i = 0; i < arr.length; i++) {
+          if (acc + arr[i]._size > MAX_VAULT) continue;
+          acc += arr[i]._size;
+          kept.push(arr[i]);
+        }
+        progress("Offline data trimmed", (arr.length - kept.length) + " large responses dropped");
+        arr = kept;
+      }
+      var totalMb = Math.round(arr.reduce(function (acc, e) { return acc + e._size; }, 0) / 1048576);
+      progress("Offline replay data ready", arr.length + " responses (" + totalMb + " MB)");
+      arr.forEach(function (e) { delete e._size; });
+      return arr.length ? arr : null;
+    });
   }
 
   function pickCover() {
@@ -797,8 +1068,10 @@
     if (snapshotRunning) return;
     snapshotRunning = true;
     api.endCleanup();
+    RECORDER.active = false; // our own serializer traffic must not enter the vault
 
     progress("Starting", location.hostname);
+    if (opts.includeScripts) opts.stripDynamic = planDynamicStrip();
     var clone = document.documentElement.cloneNode(true);
     var jobs = [];
 
@@ -833,16 +1106,28 @@
 
     runJobs(jobs, 8)
       .then(function () {
-        progress("Choosing a cover");
-        return pickCover();
+        return buildVault(opts);
       })
-      .then(function (cover) {
+      .then(function (vault) {
+        progress("Choosing a cover");
+        return pickCover().then(function (cover) {
+          return { vault: vault, cover: cover };
+        });
+      })
+      .then(function (got) {
         progress("Serializing document");
         stripDangerous(clone, opts);
 
-        // Provenance + charset hygiene.
+        // Provenance + charset hygiene + the offline replay vault.
         var head = clone.querySelector("head");
         if (head) {
+          if (got.vault) {
+            var vaultScript = document.createElement("script");
+            vaultScript.setAttribute("type", "application/json");
+            vaultScript.setAttribute("id", "prophet-vault");
+            vaultScript.textContent = JSON.stringify(got.vault).replace(/</g, "\\u003c");
+            head.insertBefore(vaultScript, head.firstChild);
+          }
           var srcMeta = document.createElement("meta");
           srcMeta.setAttribute("name", "prophet-source");
           srcMeta.setAttribute("content", location.href);
@@ -865,8 +1150,8 @@
             excerpt: meta.excerpt,
             scripts: !!opts.includeScripts,
             html: html,
-            coverB64: cover ? cover.b64 : null,
-            coverMime: cover ? cover.mime : null,
+            coverB64: got.cover ? got.cover.b64 : null,
+            coverMime: got.cover ? got.cover.mime : null,
           },
         });
       })
@@ -875,6 +1160,7 @@
       })
       .then(function () {
         snapshotRunning = false;
+        RECORDER.active = true;
       });
   }
 

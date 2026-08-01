@@ -68,6 +68,10 @@ export function mountCapture(root: HTMLElement, ctx: AppContext, url: string): (
           ),
           controls,
         ),
+        // Ornamental safety band: native webview coordinate drift (e.g. a
+        // title-bar offset on some platforms) eats this strip, never the
+        // controls above it.
+        el("div.capture-divider", null, el("div.capture-divider-rule")),
         slot,
       ),
     ),
@@ -95,6 +99,7 @@ export function mountCapture(root: HTMLElement, ctx: AppContext, url: string): (
 
   function render(): void {
     renderStepper();
+    requestAnimationFrame(() => void sendBounds());
     controls.innerHTML = "";
     if (step === "browse") {
       controls.append(
@@ -152,9 +157,9 @@ export function mountCapture(root: HTMLElement, ctx: AppContext, url: string): (
           titleInput,
           el(
             "label.check-row.check-row-inline",
-            { title: "Interactive charts and scrollytelling keep working; occasionally a script that needs the network will misbehave offline" },
+            { title: "Keeps scripts and records the page's network data so interactive charts and scrollytelling replay offline exactly as they ran online" },
             scriptsToggle,
-            el("span", null, "Keep page scripts"),
+            el("span", null, "Keep interactivity"),
           ),
           el("button.btn.btn-ghost.btn-small", { onclick: () => backToCleanup() }, "← Back"),
           el("button.btn.btn-primary", { onclick: () => void snapshot() }, "Create snapshot"),
@@ -237,12 +242,36 @@ export function mountCapture(root: HTMLElement, ctx: AppContext, url: string): (
     return { x: r.left, y: r.top, width: r.width, height: r.height };
   }
 
-  const resizeObserver = new ResizeObserver(() => {
-    if (started && !finished) {
-      void captureSetBounds(slotRect()).catch(() => {});
+  // If the native layer places the webview at an offset from what we asked
+  // for (readback tells us), compensate on subsequent calls.
+  const comp = { dx: 0, dy: 0, rounds: 0 };
+
+  async function sendBounds(): Promise<void> {
+    if (!started || finished) return;
+    const r = slotRect();
+    if (r.width < 2 || r.height < 2) return;
+    const want = { x: r.x + comp.dx, y: r.y + comp.dy, width: r.width, height: r.height };
+    try {
+      const actual = await captureSetBounds(want);
+      if (actual && comp.rounds < 3) {
+        const dx = want.x - actual.x;
+        const dy = want.y - actual.y;
+        if ((Math.abs(dx) > 2 || Math.abs(dy) > 2) && Math.abs(dx) <= 150 && Math.abs(dy) <= 150) {
+          comp.dx += dx;
+          comp.dy += dy;
+          comp.rounds++;
+          await captureSetBounds({ x: r.x + comp.dx, y: r.y + comp.dy, width: r.width, height: r.height });
+        }
+      }
+    } catch {
+      // capture view not open (yet / anymore)
     }
-  });
+  }
+
+  const resizeObserver = new ResizeObserver(() => void sendBounds());
   resizeObserver.observe(slot);
+  const onWindowResize = () => void sendBounds();
+  window.addEventListener("resize", onWindowResize);
 
   // ---- events ---------------------------------------------------------------
 
@@ -296,7 +325,12 @@ export function mountCapture(root: HTMLElement, ctx: AppContext, url: string): (
     try {
       await captureStart(url, slotRect());
       started = true;
-      void captureSetBounds(slotRect()).catch(() => {});
+      // Re-broadcast a few times: layout can settle late (fonts, first
+      // paint) and the initial native placement may need correcting.
+      void sendBounds();
+      for (const delay of [250, 750, 1500]) {
+        window.setTimeout(() => void sendBounds(), delay);
+      }
     } catch (e) {
       toast(`Could not open capture view: ${e}`, "error");
       finished = true;
@@ -309,6 +343,7 @@ export function mountCapture(root: HTMLElement, ctx: AppContext, url: string): (
 
   return () => {
     resizeObserver.disconnect();
+    window.removeEventListener("resize", onWindowResize);
     for (const u of unlisteners) u();
     if (!finished) {
       finished = true;

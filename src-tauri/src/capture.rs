@@ -58,8 +58,19 @@ pub async fn capture_start(
     }
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoundsInfo {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
 /// Keeps the embedded capture webview aligned with the slot the frontend
-/// reserved for it (called on layout changes / window resize).
+/// reserved for it (called on layout changes / window resize). Returns the
+/// bounds the webview actually ended up with (logical px) so the frontend
+/// can detect and compensate for any coordinate drift.
 #[tauri::command]
 pub async fn capture_set_bounds(
     app: AppHandle,
@@ -67,15 +78,27 @@ pub async fn capture_set_bounds(
     y: f64,
     width: f64,
     height: f64,
-) -> Result<(), String> {
+) -> Result<Option<BoundsInfo>, String> {
     let wv = app
         .get_webview("capture")
         .ok_or("the capture view is not open")?;
-    wv.set_position(tauri::LogicalPosition::new(x, y))
-        .map_err(|e| e.to_string())?;
-    wv.set_size(tauri::LogicalSize::new(width.max(1.0), height.max(1.0)))
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    let rect = tauri::Rect {
+        position: tauri::LogicalPosition::new(x, y).into(),
+        size: tauri::LogicalSize::new(width.max(1.0), height.max(1.0)).into(),
+    };
+    wv.set_bounds(rect).map_err(|e| e.to_string())?;
+
+    let scale = wv.window().scale_factor().unwrap_or(1.0);
+    Ok(wv.bounds().ok().map(|b| {
+        let pos = b.position.to_logical::<f64>(scale);
+        let size = b.size.to_logical::<f64>(scale);
+        BoundsInfo {
+            x: pos.x,
+            y: pos.y,
+            width: size.width,
+            height: size.height,
+        }
+    }))
 }
 
 /// Drives the injected toolkit from the main window.

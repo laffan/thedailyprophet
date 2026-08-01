@@ -50,7 +50,8 @@ export function captureStart(url: string, rect: CaptureRect): Promise<void> {
   return invoke("capture_start", { url, ...rect });
 }
 
-export function captureSetBounds(rect: CaptureRect): Promise<void> {
+/** Returns the bounds the webview actually got (for drift compensation). */
+export function captureSetBounds(rect: CaptureRect): Promise<CaptureRect | null> {
   return invoke("capture_set_bounds", { ...rect });
 }
 

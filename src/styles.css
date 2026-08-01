@@ -453,6 +453,20 @@ button {
   flex: 1;
   min-width: 220px;
 }
+.capture-divider {
+  flex: none;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  background: var(--paper-raised);
+}
+.capture-divider-rule {
+  flex: 1;
+  border-top: 2px solid var(--rule-strong);
+  border-bottom: 1px solid var(--rule-strong);
+  height: 5px;
+}
 .capture-slot {
   flex: 1;
   position: relative;

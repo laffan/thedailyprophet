@@ -37,6 +37,387 @@
     history.replaceState = function () { try { return origReplace.apply(null, arguments); } catch (e) {} };
   } catch (e) { /* ignore */ }
 
+  /* ---- opaque-origin survival shims ------------------------------------
+     The snapshot runs in a sandboxed iframe with an opaque origin. Several
+     APIs throw SecurityError there (cookie, indexedDB, caches...) and a
+     single uncaught throw during a page script's boot kills that script's
+     interactivity entirely. Give them all harmless fallbacks. */
+
+  var OPAQUE = (function () {
+    try { return window.origin === "null" || !window.origin; } catch (e) { return true; }
+  })();
+
+  if (OPAQUE) {
+    // document.cookie: in-memory jar.
+    (function () {
+      var broken = false;
+      try { void document.cookie; } catch (e) { broken = true; }
+      if (!broken) return;
+      var jar = new Map();
+      try {
+        Object.defineProperty(document, "cookie", {
+          configurable: true,
+          get: function () {
+            var parts = [];
+            jar.forEach(function (v, k) { parts.push(k + "=" + v); });
+            return parts.join("; ");
+          },
+          set: function (v) {
+            try {
+              var pair = String(v).split(";")[0];
+              var eq = pair.indexOf("=");
+              if (eq > 0) jar.set(pair.slice(0, eq).trim(), pair.slice(eq + 1).trim());
+            } catch (e) {}
+          },
+        });
+      } catch (e) {}
+    })();
+
+    // indexedDB: requests fail asynchronously instead of throwing.
+    (function () {
+      function failingRequest() {
+        var req = {
+          onerror: null, onsuccess: null, onupgradeneeded: null, onblocked: null,
+          readyState: "done", result: undefined,
+          error: { name: "SecurityError", message: "indexedDB is unavailable in offline snapshots" },
+          addEventListener: function (t, cb) { if (t === "error") this.onerror = cb; },
+          removeEventListener: function () {},
+        };
+        setTimeout(function () {
+          if (req.onerror) { try { req.onerror({ target: req, type: "error" }); } catch (e) {} }
+        }, 0);
+        return req;
+      }
+      var stub = {
+        open: failingRequest,
+        deleteDatabase: failingRequest,
+        databases: function () { return Promise.resolve([]); },
+        cmp: function () { return 0; },
+      };
+      try { Object.defineProperty(window, "indexedDB", { value: stub, configurable: true }); } catch (e) {}
+    })();
+
+    // CacheStorage: resolve/reject softly.
+    (function () {
+      var stub = {
+        open: function () { return Promise.reject(new Error("caches unavailable offline")); },
+        match: function () { return Promise.resolve(undefined); },
+        has: function () { return Promise.resolve(false); },
+        keys: function () { return Promise.resolve([]); },
+        delete: function () { return Promise.resolve(false); },
+      };
+      try { Object.defineProperty(window, "caches", { value: stub, configurable: true }); } catch (e) {}
+    })();
+
+    try { navigator.sendBeacon = function () { return true; }; } catch (e) {}
+
+    // WebSocket/EventSource: constructors can throw synchronously under the
+    // reader CSP; give scripts an inert socket instead of a crash.
+    (function () {
+      function inertSocket() {
+        var listeners = {};
+        var s = {
+          readyState: 3, bufferedAmount: 0, url: "", protocol: "", extensions: "",
+          binaryType: "blob",
+          onopen: null, onmessage: null, onerror: null, onclose: null,
+          send: function () {}, close: function () {},
+          addEventListener: function (t, cb) { (listeners[t] = listeners[t] || []).push(cb); },
+          removeEventListener: function () {},
+          dispatchEvent: function () { return true; },
+        };
+        setTimeout(function () {
+          var ev = { type: "error", target: s };
+          if (s.onerror) { try { s.onerror(ev); } catch (e) {} }
+          (listeners.error || []).forEach(function (cb) { try { cb(ev); } catch (e) {} });
+          var ce = { type: "close", code: 1006, reason: "offline snapshot", wasClean: false, target: s };
+          if (s.onclose) { try { s.onclose(ce); } catch (e) {} }
+          (listeners.close || []).forEach(function (cb) { try { cb(ce); } catch (e) {} });
+        }, 0);
+        return s;
+      }
+      ["WebSocket", "EventSource"].forEach(function (name) {
+        var Real = window[name];
+        if (!Real) return;
+        var Wrapped = function (url, arg) {
+          try { return new Real(url, arg); } catch (e) { return inertSocket(); }
+        };
+        Wrapped.prototype = Real.prototype;
+        if (name === "WebSocket") {
+          Wrapped.CONNECTING = 0; Wrapped.OPEN = 1; Wrapped.CLOSING = 2; Wrapped.CLOSED = 3;
+        }
+        try { window[name] = Wrapped; } catch (e) {}
+      });
+    })();
+  }
+
+  /* ---- offline replay vault ---------------------------------------------
+     The capture toolkit recorded every network response the page consumed
+     and embedded them in <script type="application/json" id="prophet-vault">.
+     Replaying them through patched fetch/XHR/script-src makes interactive
+     pieces behave offline exactly as they did online. */
+
+  function hashStr(s) {
+    var h = 5381;
+    for (var i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+    return h.toString(36);
+  }
+
+  var VAULT = { loaded: false, map: null, byUrl: null, blobUrls: {}, sourceBase: null };
+
+  function vaultLoad() {
+    if (VAULT.loaded) return VAULT;
+    VAULT.loaded = true;
+    try {
+      var srcMeta = document.querySelector('meta[name="prophet-source"]');
+      if (srcMeta) VAULT.sourceBase = srcMeta.getAttribute("content");
+    } catch (e) {}
+    try {
+      var elv = document.getElementById("prophet-vault");
+      if (!elv) return VAULT;
+      var arr = JSON.parse(elv.textContent);
+      VAULT.map = new Map();
+      VAULT.byUrl = new Map();
+      for (var i = 0; i < arr.length; i++) {
+        var e = arr[i];
+        VAULT.map.set(e.k, e);
+        if (e.k.indexOf("GET ") === 0) {
+          var uq = e.u.split("#")[0];
+          if (!VAULT.byUrl.has(uq)) VAULT.byUrl.set(uq, e);
+          var noQ = uq.split("?")[0];
+          if (!VAULT.byUrl.has(noQ)) VAULT.byUrl.set(noQ, e);
+        }
+      }
+    } catch (e) {}
+    return VAULT;
+  }
+
+  function vaultBytes(entry) {
+    if (entry._buf) return entry._buf;
+    var bin = atob(entry.b);
+    var arr = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    entry._buf = arr.buffer;
+    return entry._buf;
+  }
+
+  function vaultText(entry) {
+    if (entry._text == null) {
+      try { entry._text = new TextDecoder("utf-8").decode(vaultBytes(entry)); } catch (e) { entry._text = ""; }
+    }
+    return entry._text;
+  }
+
+  /** Resolve a page-script URL: absolute as-is, relative against the
+      original article URL (about:srcdoc can't resolve them). */
+  function resolveUrl(raw) {
+    if (raw == null) return null;
+    var s = String(raw);
+    try { return new URL(s).href; } catch (e) {}
+    var v = vaultLoad();
+    if (v.sourceBase) {
+      try { return new URL(s, v.sourceBase).href; } catch (e) {}
+    }
+    return null;
+  }
+
+  function vaultLookup(method, absUrl, body) {
+    var v = vaultLoad();
+    if (!v.map || !absUrl) return null;
+    var hit = v.map.get(method + " " + absUrl);
+    if (!hit && method !== "GET" && typeof body === "string" && body.length > 0 && body.length < 4096) {
+      hit = v.map.get(method + " " + absUrl + " " + hashStr(body));
+    }
+    if (!hit && method === "GET") {
+      var uq = absUrl.split("#")[0];
+      hit = v.byUrl.get(uq) || v.byUrl.get(uq.split("?")[0]);
+    }
+    return hit || null;
+  }
+
+  function vaultBlobUrl(absUrl, fallbackMime) {
+    var hit = vaultLookup("GET", absUrl, null);
+    if (!hit) return null;
+    if (!VAULT.blobUrls[absUrl]) {
+      try {
+        VAULT.blobUrls[absUrl] = URL.createObjectURL(
+          new Blob([vaultBytes(hit)], { type: hit.t || fallbackMime || "text/javascript" }),
+        );
+      } catch (e) {
+        return null;
+      }
+    }
+    return VAULT.blobUrls[absUrl];
+  }
+
+  // fetch replay
+  (function () {
+    var origFetch = window.fetch ? window.fetch.bind(window) : null;
+    window.fetch = function (input, init) {
+      try {
+        var method = ((init && init.method) || (input && input.method) || "GET").toUpperCase();
+        var raw = typeof input === "string" ? input : input && input.url ? input.url : String(input);
+        var abs = resolveUrl(raw);
+        var body = init && typeof init.body === "string" ? init.body : null;
+        var hit = abs && vaultLookup(method, abs, body);
+        if (hit) {
+          var resp = new Response(vaultBytes(hit).slice(0), {
+            status: hit.s || 200,
+            statusText: "OK",
+            headers: hit.t ? { "Content-Type": hit.t } : {},
+          });
+          try { Object.defineProperty(resp, "url", { value: hit.u }); } catch (e) {}
+          return Promise.resolve(resp);
+        }
+        // Miss: relative URLs are meaningless against about:srcdoc — give
+        // them their online meaning so the request at least fails like a
+        // network error instead of a TypeError.
+        if (!origFetch) return Promise.reject(new TypeError("network unavailable in snapshot"));
+        if (abs && typeof input === "string") return origFetch(abs, init);
+      } catch (e) {}
+      return origFetch
+        ? origFetch(input, init)
+        : Promise.reject(new TypeError("network unavailable in snapshot"));
+    };
+  })();
+
+  // XMLHttpRequest replay
+  (function () {
+    var RealXHR = window.XMLHttpRequest;
+    if (!RealXHR) return;
+    var Wrapped = function () {
+      var xhr = new RealXHR();
+      var meta = { m: "GET", u: "" };
+      var origOpen = xhr.open;
+      xhr.open = function (m, u) {
+        meta.m = String(m || "GET").toUpperCase();
+        meta.u = resolveUrl(String(u)) || "";
+        var args = Array.prototype.slice.call(arguments);
+        // Relative URLs don't resolve against about:srcdoc (open() throws);
+        // hand the real XHR the absolute URL the page meant.
+        if (meta.u) args[1] = meta.u;
+        return origOpen.apply(xhr, args);
+      };
+      var origSend = xhr.send;
+      xhr.send = function (body) {
+        var hit = meta.u ? vaultLookup(meta.m, meta.u, typeof body === "string" ? body : null) : null;
+        if (!hit) return origSend.apply(xhr, arguments);
+        setTimeout(function () {
+          try {
+            var define = function (k, v) {
+              try { Object.defineProperty(xhr, k, { value: v, configurable: true }); } catch (e) {}
+            };
+            define("readyState", 4);
+            define("status", hit.s || 200);
+            define("statusText", "OK");
+            define("responseURL", hit.u);
+            var rt = xhr.responseType;
+            var resp;
+            if (rt === "" || rt === "text") {
+              resp = vaultText(hit);
+              define("responseText", resp);
+            } else if (rt === "json") {
+              try { resp = JSON.parse(vaultText(hit)); } catch (e) { resp = null; }
+            } else if (rt === "arraybuffer") {
+              resp = vaultBytes(hit).slice(0);
+            } else if (rt === "blob") {
+              resp = new Blob([vaultBytes(hit)], { type: hit.t || "" });
+            } else {
+              resp = vaultText(hit);
+            }
+            define("response", resp);
+            xhr.getResponseHeader = function (n) {
+              return n && String(n).toLowerCase() === "content-type" ? hit.t || null : null;
+            };
+            xhr.getAllResponseHeaders = function () {
+              return hit.t ? "content-type: " + hit.t + "\r\n" : "";
+            };
+            var size = 0;
+            try { size = vaultBytes(hit).byteLength; } catch (e) {}
+            xhr.dispatchEvent(new Event("readystatechange"));
+            try {
+              xhr.dispatchEvent(new ProgressEvent("load", { loaded: size, total: size }));
+              xhr.dispatchEvent(new ProgressEvent("loadend", { loaded: size, total: size }));
+            } catch (e2) {
+              xhr.dispatchEvent(new Event("load"));
+              xhr.dispatchEvent(new Event("loadend"));
+            }
+          } catch (e) {}
+        }, 0);
+      };
+      return xhr;
+    };
+    Wrapped.prototype = RealXHR.prototype;
+    ["UNSENT", "OPENED", "HEADERS_RECEIVED", "LOADING", "DONE"].forEach(function (name, i) {
+      Wrapped[name] = i;
+    });
+    window.XMLHttpRequest = Wrapped;
+  })();
+
+  // Dynamically-inserted scripts and images (code-split chunks, map tiles...)
+  // get served from the vault as blob: URLs.
+  (function () {
+    function mapUrl(v, fallbackMime) {
+      var abs = resolveUrl(v);
+      if (!abs || !/^https?:/i.test(abs)) return v;
+      return vaultBlobUrl(abs, fallbackMime) || v;
+    }
+    [
+      { proto: window.HTMLScriptElement, mime: "text/javascript" },
+      { proto: window.HTMLImageElement, mime: "image/png" },
+    ].forEach(function (target) {
+      if (!target.proto) return;
+      var desc = Object.getOwnPropertyDescriptor(target.proto.prototype, "src");
+      if (!desc || !desc.set) return;
+      try {
+        Object.defineProperty(target.proto.prototype, "src", {
+          configurable: true,
+          enumerable: desc.enumerable,
+          get: desc.get,
+          set: function (v) { desc.set.call(this, mapUrl(String(v), target.mime)); },
+        });
+      } catch (e) {}
+    });
+    try {
+      var origSetAttribute = Element.prototype.setAttribute;
+      Element.prototype.setAttribute = function (name, value) {
+        if (name && String(name).toLowerCase() === "src") {
+          var tag = this.tagName;
+          if (tag === "SCRIPT") value = mapUrl(String(value), "text/javascript");
+          else if (tag === "IMG") value = mapUrl(String(value), "image/png");
+        }
+        return origSetAttribute.call(this, name, value);
+      };
+    } catch (e) {}
+    // Module scripts were defused to type="prophet/module" at capture time
+    // (a parser-inserted module would fetch before we could intercept it).
+    // Revive them from the vault in document order.
+    function reviveModules() {
+      var defused = document.querySelectorAll('script[type="prophet/module"]');
+      for (var i = 0; i < defused.length; i++) {
+        var old = defused[i];
+        var src = old.getAttribute("src") || old.getAttribute("data-prophet-src");
+        var s = document.createElement("script");
+        s.type = "module";
+        if (src) {
+          var mapped = mapUrl(src, "text/javascript");
+          if (mapped === src && !/^blob:|^data:/i.test(String(mapped))) {
+            // Not in the vault: keep the absolute URL (works online, inert offline).
+            mapped = src;
+          }
+          s.setAttribute("src", String(mapped));
+        } else {
+          s.textContent = old.textContent;
+        }
+        old.parentNode.replaceChild(s, old);
+      }
+    }
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", reviveModules);
+    } else {
+      reviveModules();
+    }
+  })();
+
   /* ---- messaging ------------------------------------------------------ */
   function send(type, payload) {
     var msg = Object.assign({ __prophet: true, type: type }, payload || {});

@@ -25,8 +25,16 @@ Built on [Tauri 2.0](https://v2.tauri.app).
   3. **Save** — the page is serialized into a single self-contained HTML
      file: stylesheets (including cross-origin ones, `@import`s and
      constructed/adopted stylesheets), images, fonts, posters, icons and
-     open shadow roots are inlined as `data:` URIs. Optionally page scripts
-     are kept so interactive pieces (charts, scrollytelling) keep working.
+     open shadow roots are inlined as `data:` URIs.
+- **Offline replay vault** — with "Keep interactivity" on (the default),
+  the capture webview records every network response the page consumes
+  (fetch, XHR, lazy script chunks — captured from document-start, with the
+  user's session) and embeds it in the snapshot. The reader replays those
+  responses through patched `fetch`/`XMLHttpRequest`/script loading, so
+  data-driven charts and scrollytelling behave offline exactly as they did
+  online. Script-generated DOM is stripped at capture so re-running scripts
+  rebuild it once, like an online reload (kept instead when the page is
+  app-rendered, e.g. an SPA shell).
 - **Library shelf** — covers (from `og:image` or the page's best image, with
   a generated "book spine" fallback), reading progress, rename / delete /
   export, drag-and-drop import.
@@ -119,11 +127,22 @@ via `srcdoc`, with a small runtime injected at the top of `<head>`:
 - The app's CSP blocks all network access from snapshots, so reading is
   *provably* offline; anything not inlined at capture time simply doesn't
   load.
-- The runtime shims `localStorage`/`sessionStorage`/`history.pushState`
-  (which throw in opaque origins) so page scripts keep running.
+- The runtime shims everything that throws in opaque origins —
+  `localStorage`/`sessionStorage`, `document.cookie`, `indexedDB`, `caches`,
+  `history.pushState`, `WebSocket`/`EventSource` — so page scripts keep
+  running instead of dying on their first storage access.
+- The runtime replays the snapshot's vault: `fetch` and `XMLHttpRequest`
+  return the recorded responses (relative URLs resolve against the original
+  article URL), and dynamically-inserted scripts/images are served from the
+  vault as `blob:` URLs — this is what keeps code-split chunks and
+  data-driven graphics alive offline.
 - Scroll tracking, highlight anchoring/painting, bookmark context, in-page
   anchor navigation and external-link interception all live in the runtime;
   external links open in the system browser.
+
+> **Privacy note:** the vault stores API responses the page fetched with
+> your session — a `.prophet` file of a personalized page may contain
+> personalized data. Export and share accordingly.
 
 ## The `.prophet` format
 
@@ -147,10 +166,14 @@ between machines is stable; otherwise a fresh id is minted.
   become placeholders.
 - Video/audio larger than the per-resource cap (30 MB) is linked, not
   inlined — it won't play offline.
-- Pages whose scripts require the network at runtime (live tickers, comment
-  widgets) will render their captured state but those features stay inert.
-- Total inlining budget is ~120 MB per snapshot; resources beyond it are
-  left as absolute URLs.
+- Live features that need fresh data (tickers, comments, search) replay
+  their captured responses; they cannot show anything newer than the
+  capture. Requests the page never made while you browsed are not in the
+  vault — interactions you never tried may dead-end offline.
+- ES-module graphs with relative imports inside `blob:`-served modules
+  cannot be fully rewired; module-heavy apps may degrade.
+- Total inlining budget is ~120 MB per snapshot (vault capped at ~48 MB);
+  resources beyond it are left as absolute URLs.
 
 ## Roadmap ideas
 
