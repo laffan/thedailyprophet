@@ -31,10 +31,11 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
   let contextReqId = 0;
   const contextWaiters = new Map<number, (p: { snippet: string; y: number; ratio: number; docHeight: number }) => void>();
 
-  const iframe = el("iframe.reader-frame", {
-    sandbox: "allow-scripts allow-forms",
-    title: "Snapshot",
-  }) as HTMLIFrameElement;
+  // Legacy snapshots are sandboxed srcdoc documents; archives are served by
+  // the app's own URI scheme, where the page needs a real origin so its
+  // scripts, modules and storage behave exactly as they did online. Network
+  // access is blocked by the CSP the protocol handler serves.
+  const iframe = el("iframe.reader-frame", { title: "Document" }) as HTMLIFrameElement;
 
   const progressLabel = el("span.reader-progress", null, "0%");
   const titleLabel = el("span.reader-title", null, "…");
@@ -548,6 +549,19 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
     progressLabel.textContent = `${Math.round((state.progress || 0) * 100)}%`;
     renderSidebar();
 
+    if ((doc.meta.format ?? 1) >= 2) {
+      // Resource-map archive: let the browser load it natively.
+      let path = "/";
+      try {
+        const u = new URL(doc.meta.sourceUrl);
+        path = u.pathname + u.search;
+      } catch {
+        /* keep root */
+      }
+      iframe.src = `prophet://${id}${path}`;
+      return;
+    }
+
     let html: string;
     try {
       html = await getDocumentHtml(id);
@@ -556,6 +570,7 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
       return;
     }
     if (disposed) return;
+    iframe.sandbox.value = "allow-scripts allow-forms";
     iframe.srcdoc = injectRuntime(html);
   }
 

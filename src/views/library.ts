@@ -67,7 +67,11 @@ export function mountLibrary(root: HTMLElement, ctx: AppContext): () => void {
       onclick: async () => {
         const picked = await openDialog({
           multiple: true,
-          filters: [{ name: "Daily Prophet Document", extensions: ["prophet"] }],
+          filters: [
+            { name: "Readable documents", extensions: ["prophet", "webarchive"] },
+            { name: "Daily Prophet Document", extensions: ["prophet"] },
+            { name: "Safari Web Archive", extensions: ["webarchive"] },
+          ],
         });
         if (!picked) return;
         const paths = Array.isArray(picked) ? picked : [picked];

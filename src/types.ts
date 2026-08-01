@@ -9,6 +9,8 @@ export interface DocMeta {
   sizeBytes: number;
   cover: string | null; // cover file name inside the document dir
   scripts: boolean; // whether page scripts were kept in the snapshot
+  /** 1 = legacy single-file snapshot; 2 = resource-map archive (prophet://). */
+  format: number;
 }
 
 /** Reading state (state.json). Owned entirely by the frontend; Rust treats it as opaque JSON. */

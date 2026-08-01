@@ -26,6 +26,9 @@ fn main() {
             "capture_fetch",
             "capture_deliver",
             "capture_failed",
+            "capture_archive_begin",
+            "capture_archive_resource",
+            "capture_archive_finish",
         ])),
     )
     .expect("failed to run tauri-build");

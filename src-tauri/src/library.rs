@@ -26,6 +26,14 @@ pub struct DocMeta {
     pub cover: Option<String>,
     #[serde(default)]
     pub scripts: bool,
+    /// 1 = legacy single-file snapshot (snapshot.html, read via srcdoc).
+    /// 2 = resource-map archive (main.html + res/, read via prophet://).
+    #[serde(default = "default_format")]
+    pub format: u32,
+}
+
+fn default_format() -> u32 {
+    1
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -193,9 +201,30 @@ pub fn create_document(app: &AppHandle, new: NewDocument) -> Result<DocSummary, 
         size_bytes,
         cover: cover_name,
         scripts: new.scripts,
+        format: 1,
     };
     write_meta(&dir, &meta)?;
     summary_for(&dir)
+}
+
+/// Allocate an empty document directory for a resource-map archive.
+pub fn new_document_dir(app: &AppHandle) -> Result<(String, PathBuf), String> {
+    ensure_library_dir(app)?;
+    let id = uuid::Uuid::new_v4().to_string();
+    let dir = doc_dir(app, &id)?;
+    fs::create_dir_all(&dir).map_err(|e| format!("could not create document dir: {e}"))?;
+    Ok((id, dir))
+}
+
+/// Persist a cover image; returns the stored file name.
+pub fn write_cover(dir: &Path, b64: &str, mime: &str) -> Option<String> {
+    let bytes = B64.decode(b64).ok()?;
+    if bytes.is_empty() || bytes.len() > 4 * 1024 * 1024 {
+        return None;
+    }
+    let name = format!("cover.{}", ext_for_mime(mime));
+    fs::write(dir.join(&name), &bytes).ok()?;
+    Some(name)
 }
 
 // ---- commands -------------------------------------------------------------

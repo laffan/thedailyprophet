@@ -22,19 +22,20 @@ Built on [Tauri 2.0](https://v2.tauri.app).
      (sidebars, banners, newsletter boxes). Arrow keys grow/shrink the
      selection between child and parent, `Z` undoes, everything can be
      restored.
-  3. **Save** — the page is serialized into a single self-contained HTML
-     file: stylesheets (including cross-origin ones, `@import`s and
-     constructed/adopted stylesheets), images, fonts, posters, icons and
-     open shadow roots are inlined as `data:` URIs.
-- **Offline replay vault** — with "Keep interactivity" on (the default),
-  the capture webview records every network response the page consumes
-  (fetch, XHR, lazy script chunks — captured from document-start, with the
-  user's session) and embeds it in the snapshot. The reader replays those
-  responses through patched `fetch`/`XMLHttpRequest`/script loading, so
-  data-driven charts and scrollytelling behave offline exactly as they did
-  online. Script-generated DOM is stripped at capture so re-running scripts
-  rebuild it once, like an online reload (kept instead when the page is
-  app-rendered, e.g. an SPA shell).
+  3. **Save** — the page source is re-fetched with your session and every
+     resource it loaded (scripts, stylesheets, fonts, images, API responses)
+     is stored under its original URL. Clean-up removals are recorded as
+     selectors so the original HTML stays intact for hydration.
+- **Archive format (the Safari `.webarchive` model)** — the main document is
+  kept exactly as the server sent it and every subresource is stored under
+  its **original URL**. At read time the app serves them back through its own
+  `prophet://` URI scheme, so the browser's loader does the work: real script
+  URLs, native `async`/`defer` ordering, native module graphs, native
+  lifecycle events. Bundled apps (Next.js/Turbopack, webpack, Vite) hydrate
+  and stay interactive offline because nothing about how they load has been
+  rewritten.
+- **Safari `.webarchive` import** — `.webarchive` files open directly; the
+  format maps onto ours one-to-one.
 - **Library shelf** — covers (from `og:image` or the page's best image, with
   a generated "book spine" fallback), reading progress, rename / delete /
   export, drag-and-drop import.
@@ -100,14 +101,14 @@ main webview (modal sheet UI)     capture child webview (the page itself,
         │     (on every layout change)      so logins/redirects are fine)
         │  capture_control("begin_cleanup")►  overlay: hover/click to remove
         │  ◄── capture_count events ────────│
-        │  capture_control("snapshot") ───► │  serializer: clones the DOM,
-        │  ◄── capture_progress events ─────│  inlines every resource
-        │                                   │  (page fetch w/ cookies first,
+        │  capture_control("snapshot") ───► │  re-fetches the page source,
+        │  ◄── capture_archive_resource ────│  streams each resource to disk
+        │  ◄── capture_progress events ─────│  (page fetch w/ cookies first,
         │                                   │   Rust fetch as CORS fallback)
-        │  ◄── capture_deliver ─────────────│  single-file HTML + cover + meta
+        │  ◄── capture_archive_finish ──────│  main.html + resources + meta
         ▼
    ~/Library/Application Support/com.thedailyprophet.reader/library/<uuid>/
-        snapshot.html   meta.json   state.json   cover.jpg
+        main.html   resources.json   res/…   meta.json   state.json   cover.jpg
 ```
 
 Remote pages can only reach Tauri commands that are explicitly granted:
@@ -119,51 +120,44 @@ their caller as untrusted.
 
 ## How reading works
 
-Snapshots are rendered in a sandboxed `<iframe sandbox="allow-scripts allow-forms">`
-via `srcdoc`, with a small runtime injected at the top of `<head>`:
+Documents are opened by navigating an iframe to `prophet://<doc-id>/<path>`.
+Every request the page makes — scripts, stylesheets, fonts, images, `fetch`,
+`XMLHttpRequest`, module imports — arrives at the protocol handler in
+`src-tauri/src/protocol.rs` and is answered from the document's resource map.
 
-- The opaque origin means snapshot scripts **cannot touch the app or Tauri
-  IPC** — the runtime talks to the reader UI only through `postMessage`.
-- The app's CSP blocks all network access from snapshots, so reading is
-  *provably* offline; anything not inlined at capture time simply doesn't
-  load.
-- The runtime shims everything that throws in opaque origins —
-  `localStorage`/`sessionStorage`, `document.cookie`, `indexedDB`, `caches`,
-  `history.pushState`, `WebSocket`/`EventSource` — so page scripts keep
-  running instead of dying on their first storage access.
-- The runtime replays the snapshot's vault: `fetch` and `XMLHttpRequest`
-  return the recorded responses (relative URLs resolve against the original
-  article URL), and dynamically-inserted scripts/images are served from the
-  vault as `blob:` URLs — this is what keeps code-split chunks and
-  data-driven graphics alive offline.
-- Scripts are never inlined-in-place at capture. Bundler runtimes (webpack,
-  Turbopack/Next.js) self-identify through their script tag's `src` URL, so
-  every executable script is *defused* (`type="prophet/*"`, content in the
-  vault, original URL kept as `data-prophet-src`) and the runtime re-executes
-  the full list in document order at `readyState === "interactive"` — DOM
-  fully parsed, but before `DOMContentLoaded`, so ready-listeners still fire.
-  Identity patches make `script.src` / `getAttribute("src")` report each
-  script's original URL, which is how chunk-path derivation keeps working
-  offline.
-- Scroll tracking, highlight anchoring/painting, bookmark context, in-page
-  anchor navigation and external-link interception all live in the runtime;
-  external links open in the system browser.
+This is the same idea as Safari's `.webarchive`: don't rewrite the page, feed
+the loader. It is what makes interactive articles keep working offline.
 
-> **Privacy note:** the vault stores API responses the page fetched with
-> your session — a `.prophet` file of a personalized page may contain
-> personalized data. Export and share accordingly.
+- Archive documents get a real origin (`prophet://<doc-id>`), so storage,
+  modules and script identity behave as they did online. The CSP served with
+  the document permits only the app's own scheme, so reading is provably
+  offline — enforced, not assumed.
+- A small runtime is injected at the top of `<head>` for reader features
+  only: scroll tracking, text-quote highlight anchoring, bookmark context,
+  in-page anchors, external-link interception, and applying the clean-up
+  removals the user made during capture (recorded as selectors so the
+  original HTML stays intact for hydration).
+- Legacy single-file snapshots (format 1) still render in a sandboxed
+  `srcdoc` iframe with the older replay path, so existing library items keep
+  working.
 
 ## The `.prophet` format
 
 A `.prophet` file is a plain zip archive:
 
-| entry           | contents                                             |
-| --------------- | ----------------------------------------------------- |
-| `prophet.json`  | format marker `{ "format": "prophet", "version": 1 }` |
-| `meta.json`     | id, title, source URL, author, excerpt, created date  |
-| `snapshot.html` | the self-contained interactive snapshot               |
-| `state.json`    | scroll position, progress, bookmarks, highlights      |
-| `cover.<ext>`   | optional cover image                                  |
+| entry            | contents                                              |
+| ---------------- | ----------------------------------------------------- |
+| `prophet.json`   | format marker `{ "format": "prophet", "version": 1 }` |
+| `meta.json`      | id, title, source URL, `format` (1 or 2), created date |
+| `main.html`      | the main document, as the server sent it (format 2)   |
+| `resources.json` | `[{ u: <original url>, f: <file>, m: <mime> }]`        |
+| `res/…`          | the subresource bytes                                 |
+| `snapshot.html`  | single-file snapshot (format 1 documents)             |
+| `state.json`     | scroll position, progress, bookmarks, highlights      |
+| `cover.<ext>`    | optional cover image                                  |
+
+Safari `.webarchive` files can be imported directly and are converted into
+this layout — the two formats express the same idea.
 
 Imports keep the original document id when it's free, so passing a document
 between machines is stable; otherwise a fresh id is minted.
@@ -175,14 +169,14 @@ between machines is stable; otherwise a fresh id is minted.
   become placeholders.
 - Video/audio larger than the per-resource cap (30 MB) is linked, not
   inlined — it won't play offline.
-- Live features that need fresh data (tickers, comments, search) replay
-  their captured responses; they cannot show anything newer than the
-  capture. Requests the page never made while you browsed are not in the
-  vault — interactions you never tried may dead-end offline.
-- ES-module graphs with relative imports inside `blob:`-served modules
-  cannot be fully rewired; module-heavy apps may degrade.
-- Total inlining budget is ~120 MB per snapshot (vault capped at ~48 MB);
-  resources beyond it are left as absolute URLs.
+- Live features that need fresh data (tickers, comments, search) can only
+  serve what was captured. A request the page never made while you browsed
+  isn't in the archive, so interactions you never tried may dead-end.
+- Resources the page loads from a third-party origin are captured only if
+  they were requested while you browsed; anything else is blocked offline by
+  the document CSP (usually a font or analytics beacon, so it degrades
+  gracefully).
+- Archives are capped at 512 MB.
 
 ## Roadmap ideas
 

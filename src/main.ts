@@ -52,7 +52,7 @@ async function init(): Promise<void> {
   await getCurrentWebview().onDragDropEvent(async (event) => {
     if (event.payload.type !== "drop") return;
     const paths = event.payload.paths.filter((p) =>
-      p.toLowerCase().endsWith(".prophet"),
+      p.toLowerCase().endsWith(".prophet") || p.toLowerCase().endsWith(".webarchive"),
     );
     for (const p of paths) {
       try {

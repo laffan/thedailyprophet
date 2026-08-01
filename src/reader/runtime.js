@@ -9,6 +9,14 @@
   if (window.__PROPHET_RUNTIME__) return;
   window.__PROPHET_RUNTIME__ = true;
 
+  /* Native mode: the document is served by the app's own URI scheme, so the
+     browser loads scripts, styles, fonts, modules and XHR/fetch itself from
+     the archive. None of the replay machinery below applies — the page runs
+     exactly as it did online. Legacy single-file snapshots (about:srcdoc)
+     still take the replay path. */
+  var NATIVE = false;
+  try { NATIVE = location.protocol === "prophet:"; } catch (e) {}
+
   /* ---- shims: opaque origins throw on storage / history access -------- */
   function memoryStorage() {
     var m = new Map();
@@ -180,6 +188,7 @@
   }
 
   function missedLifecycleEvent(type) {
+    if (NATIVE) return false; // native loading fires these in the right order
     if (type === "DOMContentLoaded") return lifecycleFired.DOMContentLoaded;
     if (type === "load" || type === "pageshow") return lifecycleFired.load;
     return false;
@@ -217,14 +226,48 @@
     });
   } catch (e) {}
 
-  // Layout-dependent animation libraries commonly re-measure on resize and
-  // arm on the first scroll; give them one nudge once everything settled.
-  window.addEventListener("load", function () {
-    setTimeout(function () {
-      try { window.dispatchEvent(new Event("resize")); } catch (e) {}
-      try { window.dispatchEvent(new Event("scroll")); } catch (e) {}
-    }, 150);
-  });
+  if (!NATIVE) {
+    // Layout-dependent animation libraries commonly re-measure on resize and
+    // arm on the first scroll; give them one nudge once everything settled.
+    window.addEventListener("load", function () {
+      setTimeout(function () {
+        try { window.dispatchEvent(new Event("resize")); } catch (e) {}
+        try { window.dispatchEvent(new Event("scroll")); } catch (e) {}
+      }, 150);
+    });
+  }
+
+  /* ---- clean-up removals ------------------------------------------------
+     Archive documents keep the original server HTML so the page's own
+     scripts can hydrate against it; the elements the user removed during
+     capture are recorded as selectors and stripped here instead. */
+  function applyCleanup() {
+    var el = document.getElementById("prophet-cleanup");
+    if (!el) return;
+    var selectors;
+    try { selectors = JSON.parse(el.textContent); } catch (e) { return; }
+    if (!selectors || !selectors.length) return;
+    function strip() {
+      for (var i = 0; i < selectors.length; i++) {
+        try {
+          var node = document.querySelector(selectors[i]);
+          if (node && node.parentNode) node.parentNode.removeChild(node);
+        } catch (e) {}
+      }
+    }
+    strip();
+    // Re-apply after hydration, which can re-insert removed nodes.
+    if (document.readyState !== "complete") {
+      window.addEventListener("load", function () { setTimeout(strip, 60); });
+    } else {
+      setTimeout(strip, 60);
+    }
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", applyCleanup);
+  } else {
+    applyCleanup();
+  }
 
   /* ---- offline replay vault ---------------------------------------------
      The capture toolkit recorded every network response the page consumed

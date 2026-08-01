@@ -1,5 +1,7 @@
+mod archive;
 mod capture;
 mod library;
+mod protocol;
 mod transfer;
 
 // Emitter is only exercised in the RunEvent::Opened handler (macOS/iOS).
@@ -26,6 +28,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(Fetcher(client))
+        .manage(capture::Staging::default())
+        // The offline equivalent of the network: documents and every
+        // resource they request are served from their archive.
+        .register_uri_scheme_protocol("prophet", protocol::handle)
         .invoke_handler(tauri::generate_handler![
             library::list_documents,
             library::get_document,
@@ -45,6 +51,9 @@ pub fn run() {
             capture::capture_fetch,
             capture::capture_deliver,
             capture::capture_failed,
+            capture::capture_archive_begin,
+            capture::capture_archive_resource,
+            capture::capture_archive_finish,
         ])
         .setup(|app| {
             library::ensure_library_dir(app.handle())?;

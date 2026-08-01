@@ -242,6 +242,145 @@ pub async fn capture_fetch(
     })
 }
 
+// ---- resource-map archive capture (format 2) -----------------------------
+
+/// Staging area for the archive currently being captured. Resources are
+/// streamed to disk as the page yields them rather than accumulated in one
+/// giant IPC payload.
+#[derive(Default)]
+pub struct Staging {
+    pub inner: std::sync::Mutex<Option<StagingArchive>>,
+}
+
+pub struct StagingArchive {
+    pub id: String,
+    pub dir: std::path::PathBuf,
+    #[allow(dead_code)]
+    pub main_url: String,
+    pub entries: Vec<crate::archive::ResourceEntry>,
+    pub bytes: u64,
+}
+
+const MAX_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
+
+#[tauri::command]
+pub fn capture_archive_begin(
+    app: AppHandle,
+    state: tauri::State<'_, Staging>,
+    main_url: String,
+) -> Result<(), String> {
+    let (id, dir) = library::new_document_dir(&app)?;
+    let mut slot = state.inner.lock().map_err(|_| "staging poisoned")?;
+    // Abandon any half-finished previous attempt.
+    if let Some(old) = slot.take() {
+        let _ = std::fs::remove_dir_all(&old.dir);
+    }
+    *slot = Some(StagingArchive {
+        id,
+        dir,
+        main_url,
+        entries: Vec::new(),
+        bytes: 0,
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn capture_archive_resource(
+    state: tauri::State<'_, Staging>,
+    url: String,
+    mime: String,
+    b64: String,
+) -> Result<bool, String> {
+    let mut slot = state.inner.lock().map_err(|_| "staging poisoned")?;
+    let st = slot.as_mut().ok_or("no capture in progress")?;
+    let bytes = crate::archive::decode_b64(&b64)?;
+    if st.bytes + bytes.len() as u64 > MAX_ARCHIVE_BYTES {
+        return Ok(false);
+    }
+    // Skip duplicates (the page may reference the same asset repeatedly).
+    if st.entries.iter().any(|e| e.u == url) {
+        return Ok(true);
+    }
+    let entry = crate::archive::store_resource(&st.dir, &url, &mime, &bytes)?;
+    st.bytes += bytes.len() as u64;
+    st.entries.push(entry);
+    Ok(true)
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveDoc {
+    pub title: String,
+    pub source_url: String,
+    #[serde(default)]
+    pub author: Option<String>,
+    #[serde(default)]
+    pub excerpt: Option<String>,
+    pub main_html: String,
+    #[serde(default)]
+    pub cover_b64: Option<String>,
+    #[serde(default)]
+    pub cover_mime: Option<String>,
+    #[serde(default)]
+    pub scripts: bool,
+}
+
+#[tauri::command]
+pub async fn capture_archive_finish(
+    app: AppHandle,
+    state: tauri::State<'_, Staging>,
+    doc: ArchiveDoc,
+) -> Result<DocSummary, String> {
+    let summary = {
+        let mut slot = state.inner.lock().map_err(|_| "staging poisoned")?;
+        let st = slot.take().ok_or("no capture in progress")?;
+        let dir = st.dir.clone();
+        let result = (|| -> Result<DocSummary, String> {
+            let origin = crate::archive::origin_of(&doc.source_url);
+            let known: Vec<String> = st.entries.iter().map(|e| e.u.clone()).collect();
+            let html = crate::archive::rewrite_text(&doc.main_html, &origin, &known);
+            std::fs::write(dir.join("main.html"), html.as_bytes())
+                .map_err(|e| format!("could not write main.html: {e}"))?;
+            crate::archive::write_manifest(&dir, &st.entries)?;
+
+            let cover = match (&doc.cover_b64, &doc.cover_mime) {
+                (Some(b), Some(m)) => library::write_cover(&dir, b, m),
+                _ => None,
+            };
+            let meta = library::DocMeta {
+                id: st.id.clone(),
+                title: if doc.title.trim().is_empty() {
+                    "Untitled".into()
+                } else {
+                    doc.title.trim().chars().take(300).collect()
+                },
+                source_url: doc.source_url.clone(),
+                author: doc.author.clone(),
+                excerpt: doc.excerpt.clone(),
+                created_at: library::now_ms(),
+                size_bytes: html.len() as u64 + st.bytes,
+                cover,
+                scripts: doc.scripts,
+                format: 2,
+            };
+            library::write_meta(&dir, &meta)?;
+            library::summary_for(&dir)
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        result?
+    };
+
+    crate::protocol::invalidate(&summary.meta.id);
+    let _ = app.emit("capture://done", &summary);
+    if let Some(wv) = app.get_webview("capture") {
+        let _ = wv.close();
+    }
+    Ok(summary)
+}
+
 /// Final delivery: persist the snapshot, tell the main window, close capture.
 #[tauri::command]
 pub async fn capture_deliver(app: AppHandle, doc: NewDocument) -> Result<DocSummary, String> {

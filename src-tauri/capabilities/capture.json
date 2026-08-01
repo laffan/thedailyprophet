@@ -13,6 +13,9 @@
     "allow-capture-count",
     "allow-capture-fetch",
     "allow-capture-deliver",
-    "allow-capture-failed"
+    "allow-capture-failed",
+    "allow-capture-archive-begin",
+    "allow-capture-archive-resource",
+    "allow-capture-archive-finish"
   ]
 }

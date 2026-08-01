@@ -1068,6 +1068,202 @@
     return { title: title.trim().slice(0, 300), excerpt: excerpt, author: author };
   }
 
+  /* ================= archive capture (format 2) =================
+     The Safari .webarchive model: keep the main document as the server sent
+     it and store every subresource under its ORIGINAL URL. At read time a
+     custom scheme serves them back, so the browser's own loader handles
+     script identity, async ordering, module graphs and lifecycle events —
+     no rewriting, no monkey-patching, no replay. */
+
+  function cssPath(el) {
+    var parts = [];
+    var node = el;
+    while (node && node.nodeType === 1 && node !== document.documentElement && parts.length < 12) {
+      var parent = node.parentElement;
+      if (!parent) break;
+      var idx = 1;
+      var sib = node;
+      while ((sib = sib.previousElementSibling)) {
+        if (sib.tagName === node.tagName) idx++;
+      }
+      parts.unshift(node.tagName.toLowerCase() + ":nth-of-type(" + idx + ")");
+      node = parent;
+    }
+    return parts.length ? "html > " + parts.join(" > ") : null;
+  }
+
+  /** Every URL this page is known to have loaded. */
+  function collectResourceUrls() {
+    var urls = [];
+    var seen = Object.create(null);
+    function add(u) {
+      if (!u) return;
+      var abs = absUrl(u);
+      if (!abs || !/^https?:/i.test(abs)) return;
+      if (abs.split("#")[0] === location.href.split("#")[0]) return; // the doc itself
+      if (seen[abs]) return;
+      seen[abs] = true;
+      urls.push(abs);
+    }
+    try {
+      var entries = performance.getEntriesByType("resource");
+      for (var i = 0; i < entries.length; i++) add(entries[i].name);
+    } catch (e) {}
+    // DOM references (covers anything that loaded before the timeline existed).
+    var q = document.querySelectorAll("script[src], link[href], img[src], source[src], video[src], audio[src], video[poster]");
+    for (var j = 0; j < q.length; j++) {
+      var el = q[j];
+      add(el.getAttribute("src") || el.getAttribute("href"));
+      if (el.getAttribute("poster")) add(el.getAttribute("poster"));
+      var ss = el.getAttribute("srcset");
+      if (ss) {
+        ss.split(",").forEach(function (part) { add(part.trim().split(/\s+/)[0]); });
+      }
+      // <img> may have resolved a different candidate than the attribute.
+      if (el.currentSrc) add(el.currentSrc);
+    }
+    // Stylesheet-referenced assets (fonts, background images).
+    try {
+      for (var s = 0; s < document.styleSheets.length; s++) {
+        var sheet = document.styleSheets[s];
+        if (sheet.href) add(sheet.href);
+      }
+    } catch (e) {}
+    // Anything the recorder saw (API payloads live here).
+    RECORDER.entries.forEach(function (v) { add(v.u); });
+    return urls;
+  }
+
+  /** Pull url(...) targets out of captured CSS so fonts/images come along. */
+  function cssAssetUrls(cssText, baseUrl) {
+    var out = [];
+    try {
+      cssText.replace(CSS_URL_RE, function (whole, q, raw) {
+        var t = (raw || "").trim();
+        if (!t || /^data:|^#/i.test(t)) return whole;
+        var abs = absUrl(t, baseUrl);
+        if (abs && /^https?:/i.test(abs)) out.push(abs);
+        return whole;
+      });
+      cssText.replace(CSS_IMPORT_RE, function (whole, u1, u2) {
+        var abs = absUrl((u1 || u2 || "").trim(), baseUrl);
+        if (abs && /^https?:/i.test(abs)) out.push(abs);
+        return whole;
+      });
+    } catch (e) {}
+    return out;
+  }
+
+  function storeResource(url) {
+    return fetchResource(url).then(function (r) {
+      if (!r || !r.buf) return null;
+      var b64 = r.dataUri.indexOf(",") >= 0 ? r.dataUri.slice(r.dataUri.indexOf(",") + 1) : null;
+      if (!b64) return null;
+      return invoke("capture_archive_resource", { url: url, mime: r.mime || "", b64: b64 })
+        .then(function (ok) { return ok ? r : null; })
+        .catch(function () { return null; });
+    });
+  }
+
+  function archiveSnapshot(opts) {
+    var removedSelectors = [];
+    for (var i = 0; i < cleanup.removed.length; i++) {
+      var sel = cssPath(cleanup.removed[i]);
+      if (sel) removedSelectors.push(sel);
+    }
+
+    progress("Starting", location.hostname);
+    return invoke("capture_archive_begin", { mainUrl: location.href })
+      .then(function () {
+        // The ORIGINAL server document — what the page's own scripts expect
+        // to hydrate against. Re-fetched with credentials so paywalled and
+        // logged-in pages come back the way the user sees them.
+        progress("Fetching the page source");
+        return (origFetch || window.fetch)(location.href, {
+          credentials: "include",
+          cache: "force-cache",
+        })
+          .then(function (r) { return r.ok ? r.text() : null; })
+          .catch(function () { return null; });
+      })
+      .then(function (serverHtml) {
+        var urls = collectResourceUrls();
+        progress("Collecting resources", urls.length + " found");
+        var done = 0;
+        var cssFollowUps = [];
+        return runJobs(
+          urls.map(function (u) {
+            return function () {
+              return storeResource(u).then(function (r) {
+                done++;
+                if (done % 10 === 0) progress("Saving resources", done + " / " + urls.length);
+                if (r && r.buf && /css/i.test(r.mime || "")) {
+                  try {
+                    var txt = new TextDecoder("utf-8").decode(r.buf);
+                    cssAssetUrls(txt, u).forEach(function (a) { cssFollowUps.push(a); });
+                  } catch (e) {}
+                }
+              });
+            };
+          }),
+          6,
+        ).then(function () {
+          // Second pass: assets referenced from inside stylesheets.
+          var extra = cssFollowUps.filter(function (u, i) {
+            return cssFollowUps.indexOf(u) === i && !resourceCache.has(u);
+          });
+          if (!extra.length) return serverHtml;
+          progress("Saving stylesheet assets", extra.length + " found");
+          return runJobs(
+            extra.map(function (u) { return function () { return storeResource(u); }; }),
+            6,
+          ).then(function () { return serverHtml; });
+        });
+      })
+      .then(function (serverHtml) {
+        progress("Choosing a cover");
+        return pickCover().then(function (cover) {
+          return { html: serverHtml, cover: cover };
+        });
+      })
+      .then(function (got) {
+        var html = got.html;
+        if (!html) {
+          // Could not re-fetch (rare): fall back to the live DOM, which at
+          // least preserves what the user prepared.
+          progress("Using the live DOM", "page source unavailable");
+          var clone = document.documentElement.cloneNode(true);
+          var strays = clone.querySelectorAll("[" + UI_ATTR + "], [" + REMOVED_ATTR + "]");
+          for (var i = 0; i < strays.length; i++) {
+            if (strays[i].parentNode) strays[i].parentNode.removeChild(strays[i]);
+          }
+          html = "<!DOCTYPE html>\n" + clone.outerHTML;
+          removedSelectors = []; // already applied
+        }
+        if (removedSelectors.length) {
+          var payload = JSON.stringify(removedSelectors).replace(/</g, "\\u003c");
+          var tag =
+            '<script type="application/json" id="prophet-cleanup">' + payload + "</" + "script>";
+          var at = html.toLowerCase().lastIndexOf("</body>");
+          html = at > -1 ? html.slice(0, at) + tag + html.slice(at) : html + tag;
+        }
+        var meta = collectMeta(opts);
+        progress("Saving", Math.round(html.length / 1024) + " KB page + resources");
+        return invoke("capture_archive_finish", {
+          doc: {
+            title: meta.title,
+            sourceUrl: location.href,
+            author: meta.author,
+            excerpt: meta.excerpt,
+            mainHtml: html,
+            coverB64: got.cover ? got.cover.b64 : null,
+            coverMime: got.cover ? got.cover.mime : null,
+            scripts: true,
+          },
+        });
+      });
+  }
+
   var snapshotRunning = false;
 
   function snapshot(opts) {
@@ -1076,6 +1272,21 @@
     snapshotRunning = true;
     api.endCleanup();
     RECORDER.active = false; // our own serializer traffic must not enter the vault
+
+    // Interactive captures use the resource-map archive: the page keeps its
+    // real URLs and the browser loads it natively at read time. Only the
+    // "no scripts" mode still flattens into a single file.
+    if (opts.includeScripts !== false) {
+      archiveSnapshot(opts)
+        .catch(function (e) {
+          invoke("capture_failed", { message: String((e && e.message) || e) }).catch(function () {});
+        })
+        .then(function () {
+          snapshotRunning = false;
+          RECORDER.active = true;
+        });
+      return;
+    }
 
     progress("Starting", location.hostname);
     if (opts.includeScripts) opts.stripDynamic = planDynamicStrip();

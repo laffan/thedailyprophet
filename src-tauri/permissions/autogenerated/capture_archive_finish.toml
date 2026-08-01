@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-capture-archive-finish"
+description = "Enables the capture_archive_finish command without any pre-configured scope."
+commands.allow = ["capture_archive_finish"]
+
+[[permission]]
+identifier = "deny-capture-archive-finish"
+description = "Denies the capture_archive_finish command without any pre-configured scope."
+commands.deny = ["capture_archive_finish"]
