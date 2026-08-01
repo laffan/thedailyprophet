@@ -1,3 +1,32 @@
 fn main() {
-    tauri_build::build()
+    // Declaring an app ACL manifest gates ALL app commands: every command
+    // must then be granted through a capability. This is what lets us expose
+    // exactly six capture_* commands to remote pages in the capture webview
+    // (capabilities/capture.json) while everything else stays main-window
+    // only (capabilities/main.json).
+    tauri_build::try_build(
+        tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
+            // main window (local context)
+            "list_documents",
+            "get_document",
+            "get_document_html",
+            "save_state",
+            "rename_document",
+            "delete_document",
+            "platform",
+            "export_document",
+            "import_document",
+            "capture_start",
+            "capture_control",
+            "capture_set_bounds",
+            // capture webview (remote context)
+            "capture_page_info",
+            "capture_progress",
+            "capture_count",
+            "capture_fetch",
+            "capture_deliver",
+            "capture_failed",
+        ])),
+    )
+    .expect("failed to run tauri-build");
 }

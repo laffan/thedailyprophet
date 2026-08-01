@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "Capabilities for the main library/reader window",
-  "windows": ["main"],
+  "description": "Capabilities for the main library/reader webview",
+  "webviews": ["main"],
   "permissions": [
     "core:default",
     "dialog:default",
@@ -10,6 +10,18 @@
     {
       "identifier": "opener:allow-open-url",
       "allow": [{ "url": "https://**" }, { "url": "http://**" }]
-    }
+    },
+    "allow-list-documents",
+    "allow-get-document",
+    "allow-get-document-html",
+    "allow-save-state",
+    "allow-rename-document",
+    "allow-delete-document",
+    "allow-platform",
+    "allow-export-document",
+    "allow-import-document",
+    "allow-capture-start",
+    "allow-capture-control",
+    "allow-capture-set-bounds"
   ]
 }

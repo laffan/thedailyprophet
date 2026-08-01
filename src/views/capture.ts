@@ -1,46 +1,75 @@
 import type { AppContext } from "../main";
-import { captureStart, captureControl, captureSnapshot } from "../api";
+import {
+  captureStart,
+  captureSetBounds,
+  captureControl,
+  captureSnapshot,
+  type CaptureRect,
+} from "../api";
 import type { DocSummary } from "../types";
 import { el, toast, domainOf } from "../util";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 type Step = "browse" | "cleanup" | "save" | "working";
 
+/**
+ * The capture flow is a modal sheet inside the main window: the page itself
+ * renders in a native child webview positioned over `.capture-slot`, and all
+ * tools live in the sheet header directly above it. (No separate OS window —
+ * this is also the only shape that can work on iPad later.)
+ */
 export function mountCapture(root: HTMLElement, ctx: AppContext, url: string): () => void {
   let step: Step = "browse";
   let finished = false;
+  let started = false;
   let removedCount = 0;
   let pageTitle = "";
   let pageUrl = url;
   const unlisteners: UnlistenFn[] = [];
 
-  const stepper = el("ol.stepper");
-  const panel = el("div.capture-panel");
-  const pageInfo = el("p.capture-pageinfo", null, `Opening ${domainOf(url)}…`);
+  const stepper = el("ol.stepper.stepper-compact");
+  const controls = el("div.capture-controls");
+  const pageInfo = el("span.capture-pageinfo", null, `Opening ${domainOf(url)}…`);
   const progressLog = el("ul.progress-log");
+  const slot = el(
+    "div.capture-slot",
+    null,
+    el("div.capture-slot-placeholder", null, "Loading page…"),
+  );
 
-  const titleInput = el("input.text-input", {
+  const titleInput = el("input.text-input.capture-title-input", {
     type: "text",
     placeholder: "Title for your library",
     spellcheck: false,
   }) as HTMLInputElement;
 
-  const scriptsToggle = el("input", { type: "checkbox", checked: true, id: "opt-scripts" }) as HTMLInputElement;
+  const scriptsToggle = el("input", {
+    type: "checkbox",
+    checked: true,
+    id: "opt-scripts",
+  }) as HTMLInputElement;
 
   root.append(
     el(
-      "div.capture-view",
+      "div.capture-modal",
       null,
       el(
-        "header.capture-header",
+        "div.capture-sheet",
         null,
-        el("button.btn.btn-ghost", { onclick: () => cancel() }, "← Cancel"),
-        el("h2", null, "Capture a story"),
-        el("span.capture-header-spacer"),
+        el(
+          "header.capture-sheet-head",
+          null,
+          el(
+            "div.capture-head-row",
+            null,
+            el("button.btn.btn-ghost.btn-small", { onclick: () => cancel() }, "✕ Cancel"),
+            stepper,
+            pageInfo,
+          ),
+          controls,
+        ),
+        slot,
       ),
-      pageInfo,
-      stepper,
-      panel,
     ),
   );
 
@@ -66,47 +95,42 @@ export function mountCapture(root: HTMLElement, ctx: AppContext, url: string): (
 
   function render(): void {
     renderStepper();
-    panel.innerHTML = "";
+    controls.innerHTML = "";
     if (step === "browse") {
-      panel.append(
-        el("h3.panel-title", null, "Prepare the page"),
+      controls.append(
         el(
-          "p.panel-body",
+          "p.capture-hint",
           null,
-          "A capture window has opened next to this one. Use it like a normal browser: log in if the story is behind a paywall, dismiss cookie banners, expand collapsed sections, and scroll to the end so lazy-loaded images appear.",
+          "Use the page below like a normal browser: log in, dismiss banners, expand sections, scroll to the end so lazy images load. When it looks right, continue.",
         ),
         el(
-          "p.panel-body.muted",
-          null,
-          "When the page looks the way you want to keep it, continue to clean-up.",
-        ),
-        el(
-          "div.panel-actions",
+          "div.capture-actions",
           null,
           el("button.btn.btn-primary", { onclick: () => beginCleanup() }, "Continue to clean-up →"),
         ),
       );
     } else if (step === "cleanup") {
-      panel.append(
-        el("h3.panel-title", null, "Remove the clutter"),
+      controls.append(
         el(
-          "p.panel-body",
+          "p.capture-hint",
           null,
-          "In the capture window, hover over any element to outline it, then click to remove it. Sidebars, banners, newsletter boxes — anything you don't want in the snapshot.",
+          "Hover an element below and click to remove it (sidebars, banners, popups). ",
+          el("strong", null, "↑/↓"),
+          " grows or shrinks the selection · ",
+          el("strong", null, "Z"),
+          " undoes.",
         ),
         el(
-          "ul.panel-hints",
+          "div.capture-actions",
           null,
-          el("li", null, "↑ / ↓ arrows grow or shrink the selection (child ↔ parent)"),
-          el("li", null, "Z undoes the last removal"),
-        ),
-        el("p.panel-count", null, countText()),
-        el(
-          "div.panel-actions",
-          null,
-          el("button.btn.btn-ghost", { onclick: () => void captureControl("undo").then(bumpCountDown) }, "Undo"),
+          el("span.capture-count", null, countText()),
           el(
-            "button.btn.btn-ghost",
+            "button.btn.btn-ghost.btn-small",
+            { onclick: () => void captureControl("undo").then(bumpCountDown) },
+            "Undo",
+          ),
+          el(
+            "button.btn.btn-ghost.btn-small",
             {
               onclick: () =>
                 void captureControl("restore_all").then(() => {
@@ -121,36 +145,29 @@ export function mountCapture(root: HTMLElement, ctx: AppContext, url: string): (
       );
     } else if (step === "save") {
       titleInput.value = titleInput.value || pageTitle;
-      panel.append(
-        el("h3.panel-title", null, "Create the snapshot"),
-        el("label.field-label", { for: "cap-title" }, "Title"),
-        titleInput,
+      controls.append(
         el(
-          "label.check-row",
+          "div.capture-actions",
           null,
-          scriptsToggle,
+          titleInput,
           el(
-            "span",
-            null,
-            "Keep page scripts (interactive charts and scrollytelling keep working; occasionally a script that needs the network will misbehave offline)",
+            "label.check-row.check-row-inline",
+            { title: "Interactive charts and scrollytelling keep working; occasionally a script that needs the network will misbehave offline" },
+            scriptsToggle,
+            el("span", null, "Keep page scripts"),
           ),
-        ),
-        el(
-          "div.panel-actions",
-          null,
-          el("button.btn.btn-ghost", { onclick: () => backToCleanup() }, "← Back"),
+          el("button.btn.btn-ghost.btn-small", { onclick: () => backToCleanup() }, "← Back"),
           el("button.btn.btn-primary", { onclick: () => void snapshot() }, "Create snapshot"),
         ),
       );
     } else {
-      panel.append(
-        el("h3.panel-title", null, "Building your snapshot…"),
+      controls.append(
         el(
-          "p.panel-body.muted",
+          "div.capture-actions",
           null,
-          "Inlining styles, images and fonts so the story reads perfectly offline. Big pages can take a minute.",
+          el("div.spinner.spinner-small"),
+          el("span.capture-hint", null, "Building your snapshot — inlining styles, images and fonts…"),
         ),
-        el("div.spinner"),
         progressLog,
       );
     }
@@ -163,7 +180,7 @@ export function mountCapture(root: HTMLElement, ctx: AppContext, url: string): (
   }
 
   function updateCount(): void {
-    const n = panel.querySelector(".panel-count");
+    const n = controls.querySelector(".capture-count");
     if (n) n.textContent = countText();
   }
 
@@ -207,10 +224,27 @@ export function mountCapture(root: HTMLElement, ctx: AppContext, url: string): (
   }
 
   function cancel(): void {
+    if (finished) return;
     finished = true;
     void captureControl("cancel").catch(() => {});
     ctx.navigate({ name: "library" });
   }
+
+  // ---- child webview geometry ---------------------------------------------
+
+  function slotRect(): CaptureRect {
+    const r = slot.getBoundingClientRect();
+    return { x: r.left, y: r.top, width: r.width, height: r.height };
+  }
+
+  const resizeObserver = new ResizeObserver(() => {
+    if (started && !finished) {
+      void captureSetBounds(slotRect()).catch(() => {});
+    }
+  });
+  resizeObserver.observe(slot);
+
+  // ---- events ---------------------------------------------------------------
 
   async function wire(): Promise<void> {
     unlisteners.push(
@@ -250,18 +284,23 @@ export function mountCapture(root: HTMLElement, ctx: AppContext, url: string): (
       }),
       await listen("capture://closed", () => {
         if (!finished) {
-          toast("Capture window closed — capture cancelled");
+          finished = true;
+          toast("Capture cancelled");
           ctx.navigate({ name: "library" });
         }
       }),
     );
 
+    // Let the sheet lay out once so the slot has real dimensions.
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
     try {
-      await captureStart(url);
+      await captureStart(url, slotRect());
+      started = true;
+      void captureSetBounds(slotRect()).catch(() => {});
     } catch (e) {
-      toast(`Could not open capture window: ${e}`, "error");
+      toast(`Could not open capture view: ${e}`, "error");
+      finished = true;
       ctx.navigate({ name: "library" });
-      return;
     }
   }
 
@@ -269,7 +308,11 @@ export function mountCapture(root: HTMLElement, ctx: AppContext, url: string): (
   void wire();
 
   return () => {
-    finished = true;
+    resizeObserver.disconnect();
     for (const u of unlisteners) u();
+    if (!finished) {
+      finished = true;
+      void captureControl("cancel").catch(() => {});
+    }
   };
 }

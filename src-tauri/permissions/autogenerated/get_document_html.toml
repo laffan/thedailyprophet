@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-document-html"
+description = "Enables the get_document_html command without any pre-configured scope."
+commands.allow = ["get_document_html"]
+
+[[permission]]
+identifier = "deny-get-document-html"
+description = "Denies the get_document_html command without any pre-configured scope."
+commands.deny = ["get_document_html"]

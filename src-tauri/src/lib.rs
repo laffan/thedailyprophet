@@ -2,6 +2,8 @@ mod capture;
 mod library;
 mod transfer;
 
+// Emitter is only exercised in the RunEvent::Opened handler (macOS/iOS).
+#[cfg_attr(not(any(target_os = "macos", target_os = "ios")), allow(unused_imports))]
 use tauri::Emitter;
 
 /// Shared HTTP client used as a fallback fetcher for page resources the
@@ -35,6 +37,7 @@ pub fn run() {
             transfer::export_document,
             transfer::import_document,
             capture::capture_start,
+            capture::capture_set_bounds,
             capture::capture_control,
             capture::capture_page_info,
             capture::capture_progress,
@@ -58,13 +61,6 @@ pub fn run() {
                 }
             }
             Ok(())
-        })
-        .on_window_event(|window, event| {
-            if window.label() == "capture" {
-                if let tauri::WindowEvent::Destroyed = event {
-                    let _ = tauri::Manager::app_handle(window).emit("capture://closed", ());
-                }
-            }
         })
         .build(tauri::generate_context!())
         .expect("error while building The Daily Prophet");

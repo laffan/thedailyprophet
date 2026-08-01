@@ -39,8 +39,19 @@ export function appPlatform(): Promise<string> {
 
 // ---- capture flow ------------------------------------------------------
 
-export function captureStart(url: string): Promise<void> {
-  return invoke("capture_start", { url });
+export interface CaptureRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export function captureStart(url: string, rect: CaptureRect): Promise<void> {
+  return invoke("capture_start", { url, ...rect });
+}
+
+export function captureSetBounds(rect: CaptureRect): Promise<void> {
+  return invoke("capture_set_bounds", { ...rect });
 }
 
 export type CaptureAction =

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-capture-page-info"
+description = "Enables the capture_page_info command without any pre-configured scope."
+commands.allow = ["capture_page_info"]
+
+[[permission]]
+identifier = "deny-capture-page-info"
+description = "Denies the capture_page_info command without any pre-configured scope."
+commands.deny = ["capture_page_info"]

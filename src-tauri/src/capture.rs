@@ -8,11 +8,22 @@ use crate::Fetcher;
 
 const MAX_FETCH_BYTES: u64 = 30 * 1024 * 1024;
 
-/// Opens the capture window on the requested page with the capture toolkit
+/// Opens the capture webview as a child of the main window (a modal sheet —
+/// no separate OS window), on the requested page, with the capture toolkit
 /// injected as an initialization script (re-injected on every navigation, so
 /// logging in and moving between pages is fine).
+///
+/// `x/y/width/height` are logical (CSS) pixels of the slot the frontend
+/// reserved for the page, relative to the window's content area.
 #[tauri::command]
-pub async fn capture_start(app: AppHandle, url: String) -> Result<(), String> {
+pub async fn capture_start(
+    app: AppHandle,
+    url: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
     #[cfg(desktop)]
     {
         let parsed = tauri::Url::parse(&url).map_err(|e| format!("invalid url: {e}"))?;
@@ -20,27 +31,51 @@ pub async fn capture_start(app: AppHandle, url: String) -> Result<(), String> {
             "http" | "https" => {}
             other => return Err(format!("only http(s) pages can be captured (got {other}:)")),
         }
-        if let Some(existing) = app.get_webview_window("capture") {
+        if let Some(existing) = app.get_webview("capture") {
             let _ = existing.close();
         }
-        let win = tauri::WebviewWindowBuilder::new(
-            &app,
-            "capture",
-            tauri::WebviewUrl::External(parsed),
-        )
-        .title("Capture — The Daily Prophet")
-        .inner_size(1120.0, 860.0)
-        .initialization_script(include_str!("../injected/capture.js"))
-        .build()
-        .map_err(|e| format!("could not open capture window: {e}"))?;
-        let _ = win.set_focus();
+        let window = app
+            .get_window("main")
+            .ok_or("main window not found")?;
+        let builder =
+            tauri::webview::WebviewBuilder::new("capture", tauri::WebviewUrl::External(parsed))
+                .initialization_script(include_str!("../injected/capture.js"))
+                .focused(true);
+        let webview = window
+            .add_child(
+                builder,
+                tauri::LogicalPosition::new(x, y),
+                tauri::LogicalSize::new(width.max(1.0), height.max(1.0)),
+            )
+            .map_err(|e| format!("could not open capture view: {e}"))?;
+        let _ = webview.set_focus();
         Ok(())
     }
     #[cfg(not(desktop))]
     {
-        let _ = (app, url);
+        let _ = (app, url, x, y, width, height);
         Err("Capturing needs the desktop app for now — import .prophet files on this device instead.".into())
     }
+}
+
+/// Keeps the embedded capture webview aligned with the slot the frontend
+/// reserved for it (called on layout changes / window resize).
+#[tauri::command]
+pub async fn capture_set_bounds(
+    app: AppHandle,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    let wv = app
+        .get_webview("capture")
+        .ok_or("the capture view is not open")?;
+    wv.set_position(tauri::LogicalPosition::new(x, y))
+        .map_err(|e| e.to_string())?;
+    wv.set_size(tauri::LogicalSize::new(width.max(1.0), height.max(1.0)))
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// Drives the injected toolkit from the main window.
@@ -50,9 +85,9 @@ pub async fn capture_control(
     action: String,
     options: Option<Value>,
 ) -> Result<(), String> {
-    let win = app
-        .get_webview_window("capture")
-        .ok_or("the capture window is not open")?;
+    let wv = app
+        .get_webview("capture")
+        .ok_or("the capture view is not open")?;
     const NS: &str = "window.__PROPHET_CAPTURE__ && window.__PROPHET_CAPTURE__";
     let js = match action.as_str() {
         "begin_cleanup" => format!("{NS}.beginCleanup();"),
@@ -65,15 +100,21 @@ pub async fn capture_control(
             format!("{NS}.snapshot({json});")
         }
         "cancel" => {
-            let _ = win.close();
+            let _ = wv.close();
+            let _ = app.emit("capture://closed", ());
             return Ok(());
         }
         other => return Err(format!("unknown capture action: {other}")),
     };
-    win.eval(js.as_str()).map_err(|e| e.to_string())
+    wv.eval(js).map_err(|e| e.to_string())
 }
 
 // ---- commands invoked BY the capture page (remote IPC) --------------------
+//
+// These are reachable from arbitrary web pages loaded in the capture webview
+// (see capabilities/capture.json), so every one of them treats its input as
+// untrusted: they only report progress, fetch public resources with hard
+// size caps, or hand over content that the library layer sanitizes.
 
 #[tauri::command]
 pub fn capture_page_info(app: AppHandle, title: String, url: String) -> Result<(), String> {
@@ -184,8 +225,8 @@ pub async fn capture_deliver(app: AppHandle, doc: NewDocument) -> Result<DocSumm
     let summary = library::create_document(&app, doc)?;
     let _ = app.emit("capture://done", &summary);
     let _ = app.emit("library://changed", ());
-    if let Some(w) = app.get_webview_window("capture") {
-        let _ = w.close();
+    if let Some(wv) = app.get_webview("capture") {
+        let _ = wv.close();
     }
     Ok(summary)
 }

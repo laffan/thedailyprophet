@@ -12,10 +12,12 @@ Built on [Tauri 2.0](https://v2.tauri.app).
 
 ## Features
 
-- **Capture pipeline with a human in the loop**
-  1. **Browse** — a dedicated capture window opens the page like a normal
-     browser. Log in, dismiss cookie banners, expand collapsed sections,
-     scroll to force lazy content to load.
+- **Capture pipeline with a human in the loop** — a modal sheet inside the
+  main window (the page renders in an embedded child webview, no separate
+  OS window):
+  1. **Browse** — use the page like a normal browser. Log in, dismiss
+     cookie banners, expand collapsed sections, scroll to force lazy
+     content to load.
   2. **Clean up** — hover-and-click removal of extraneous elements
      (sidebars, banners, newsletter boxes). Arrow keys grow/shrink the
      selection between child and parent, `Z` undoes, everything can be
@@ -65,8 +67,10 @@ npm run icon
 ### iPadOS
 
 Reading, bookmarks, highlights and `.prophet` import/export all work on
-iPadOS. The capture flow needs a second webview window and is desktop-only
-in this version (the capture command returns a friendly error on iOS).
+iPadOS. The capture flow already renders as a modal inside the main window,
+but embedding a second webview (`Window::add_child`) is desktop-only in
+Tauri today, so capture is desktop-only in this version (the capture
+command returns a friendly error on iOS).
 
 ```sh
 npm run tauri ios init   # one-time; generates the Xcode project in src-tauri/gen
@@ -80,12 +84,13 @@ the [Tauri iOS guide](https://v2.tauri.app/develop/#developing-your-mobile-appli
 ## How capture works
 
 ```
-main window (library UI)          capture window (the page itself)
-        │                                   │
-        │  capture_start(url) ──────────►  opens with capture.js injected
-        │                                   │  (re-injected on every navigation,
-        │                                   │   so logins/redirects are fine)
-        │  capture_control("begin_cleanup")►│  overlay: hover/click to remove
+main webview (modal sheet UI)     capture child webview (the page itself,
+        │                          embedded in the same window over the
+        │                          sheet's slot area)
+        │  capture_start(url, rect) ─────►  opens with capture.js injected
+        │  capture_set_bounds(rect) ─────►  (re-injected on every navigation,
+        │     (on every layout change)      so logins/redirects are fine)
+        │  capture_control("begin_cleanup")►  overlay: hover/click to remove
         │  ◄── capture_count events ────────│
         │  capture_control("snapshot") ───► │  serializer: clones the DOM,
         │  ◄── capture_progress events ─────│  inlines every resource
@@ -97,9 +102,12 @@ main window (library UI)          capture window (the page itself)
         snapshot.html   meta.json   state.json   cover.jpg
 ```
 
-The capture window is granted IPC access via a Tauri capability with a
-remote-URL scope (`src-tauri/capabilities/capture.json`) — that's what lets
-the injected toolkit call the `capture_*` commands from arbitrary pages.
+Remote pages can only reach Tauri commands that are explicitly granted:
+`build.rs` declares the app's ACL manifest (which gates *every* app command),
+`capabilities/main.json` grants the library/reader commands to the main
+webview, and `capabilities/capture.json` grants exactly the six `capture_*`
+reporting commands to remote URLs in the capture webview. All six treat
+their caller as untrusted.
 
 ## How reading works
 

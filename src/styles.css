@@ -379,62 +379,132 @@ button {
   line-height: 1.5;
 }
 
-/* ---- capture view ---- */
+/* ---- capture modal ----
+   The page itself renders in a NATIVE child webview positioned exactly over
+   .capture-slot, so every app control must live in the sheet header — DOM
+   can never overlap the slot. */
 
-.capture-view {
-  flex: 1;
-  overflow-y: auto;
-  padding: 24px 40px 60px;
-  max-width: 760px;
-  margin: 0 auto;
-  width: 100%;
+.capture-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(24, 18, 8, 0.5);
+  display: flex;
+  padding: 16px;
 }
-.capture-header {
+.capture-sheet {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--paper-raised);
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.capture-sheet-head {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 10px 14px 12px;
+  border-bottom: 1px solid var(--rule);
+}
+.capture-head-row {
   display: flex;
   align-items: center;
-  gap: 18px;
-  margin-bottom: 8px;
-}
-.capture-header h2 {
-  font-family: var(--serif);
-  font-size: 22px;
-  flex: 1;
-  text-align: center;
-}
-.capture-header-spacer {
-  width: 88px;
+  gap: 16px;
+  min-width: 0;
 }
 .capture-pageinfo {
-  text-align: center;
-  font-size: 12.5px;
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+  font-size: 12px;
   color: var(--ink-soft);
-  margin-bottom: 22px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.capture-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.capture-hint {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+}
+.capture-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.capture-actions .btn-primary {
+  margin-left: auto;
+}
+.capture-count {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.capture-title-input {
+  flex: 1;
+  min-width: 220px;
+}
+.capture-slot {
+  flex: 1;
+  position: relative;
+  background: #fff;
+}
+@media (prefers-color-scheme: dark) {
+  .capture-slot {
+    background: #121212;
+  }
+}
+.capture-slot-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-soft);
+  font-size: 14px;
+}
+
+/* Toasts render behind the native capture webview at the bottom; keep them
+   in the header zone while capturing. */
+#app[data-view="capture"] ~ .toast-root {
+  bottom: auto;
+  top: 78px;
+}
+
+.btn-small {
+  padding: 5px 12px;
+  font-size: 12.5px;
+}
+
 .stepper {
   display: flex;
-  justify-content: center;
-  gap: 34px;
+  gap: 22px;
   list-style: none;
-  margin-bottom: 26px;
 }
 .step {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   color: var(--ink-soft);
 }
 .step-num {
-  width: 26px;
-  height: 26px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   border: 1.5px solid var(--rule-strong);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
+  font-size: 11.5px;
   font-weight: 700;
 }
 .step.active {
@@ -451,90 +521,47 @@ button {
   color: var(--paper);
 }
 .step-label {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
 }
 
-.capture-panel {
-  background: var(--paper-raised);
-  border: 1px solid var(--rule);
-  border-radius: 10px;
-  box-shadow: var(--shadow-soft);
-  padding: 28px 30px;
-}
-.panel-title {
-  font-family: var(--serif);
-  font-size: 19px;
-  margin-bottom: 12px;
-}
-.panel-body {
-  font-size: 14px;
-  line-height: 1.55;
-  margin-bottom: 10px;
-}
-.panel-hints {
-  margin: 10px 0 12px 18px;
-  font-size: 13px;
-  color: var(--ink-soft);
-  line-height: 1.7;
-}
-.panel-count {
-  font-size: 13.5px;
-  font-weight: 600;
-  margin: 8px 0 4px;
-}
-.panel-actions {
-  display: flex;
-  gap: 10px;
-  margin-top: 20px;
-  align-items: center;
-}
-.panel-actions .btn-primary {
-  margin-left: auto;
-}
-.field-label {
-  display: block;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--ink-soft);
-  margin: 6px 0 6px;
-}
 .check-row {
   display: flex;
-  gap: 10px;
-  align-items: flex-start;
-  margin-top: 16px;
+  gap: 8px;
+  align-items: center;
   font-size: 13px;
   line-height: 1.5;
   color: var(--ink-soft);
   cursor: pointer;
 }
-.check-row input {
-  margin-top: 2px;
+.check-row-inline {
+  white-space: nowrap;
 }
 .progress-log {
   list-style: none;
-  margin-top: 16px;
-  max-height: 240px;
+  max-height: 96px;
   overflow-y: auto;
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--ink-soft);
   border-top: 1px solid var(--rule);
-  padding-top: 10px;
+  padding-top: 6px;
 }
 .progress-log li {
-  padding: 2.5px 0;
+  padding: 2px 0;
 }
 .spinner {
   width: 26px;
   height: 26px;
-  margin: 14px 0 0;
   border-radius: 50%;
   border: 3px solid var(--rule);
   border-top-color: var(--accent);
   animation: spin 0.9s linear infinite;
+  flex: none;
+}
+.spinner-small {
+  width: 17px;
+  height: 17px;
+  border-width: 2.5px;
 }
 @keyframes spin {
   to {

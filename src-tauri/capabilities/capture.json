@@ -1,10 +1,18 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "capture-remote",
-  "description": "Grants pages loaded in the capture window access to the IPC bridge so the injected capture toolkit can report progress and deliver snapshots. Only the app's own capture_* commands are meaningful here.",
-  "windows": ["capture"],
+  "description": "Grants pages loaded in the embedded capture webview access to exactly the capture_* reporting commands, so the injected toolkit can report progress and deliver snapshots. All of these commands treat their caller as untrusted.",
+  "webviews": ["capture"],
   "remote": {
     "urls": ["https://*", "http://*"]
   },
-  "permissions": ["core:event:default"]
+  "local": false,
+  "permissions": [
+    "allow-capture-page-info",
+    "allow-capture-progress",
+    "allow-capture-count",
+    "allow-capture-fetch",
+    "allow-capture-deliver",
+    "allow-capture-failed"
+  ]
 }
