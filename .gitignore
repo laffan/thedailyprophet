@@ -1,0 +1,17 @@
+# Node
+node_modules/
+dist/
+
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Generated icon source (icons themselves are committed)
+app-icon.png
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

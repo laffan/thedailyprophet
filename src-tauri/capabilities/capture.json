@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "capture-remote",
+  "description": "Grants pages loaded in the capture window access to the IPC bridge so the injected capture toolkit can report progress and deliver snapshots. Only the app's own capture_* commands are meaningful here.",
+  "windows": ["capture"],
+  "remote": {
+    "urls": ["https://*", "http://*"]
+  },
+  "permissions": ["core:event:default"]
+}
