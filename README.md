@@ -136,6 +136,15 @@ via `srcdoc`, with a small runtime injected at the top of `<head>`:
   article URL), and dynamically-inserted scripts/images are served from the
   vault as `blob:` URLs — this is what keeps code-split chunks and
   data-driven graphics alive offline.
+- Scripts are never inlined-in-place at capture. Bundler runtimes (webpack,
+  Turbopack/Next.js) self-identify through their script tag's `src` URL, so
+  every executable script is *defused* (`type="prophet/*"`, content in the
+  vault, original URL kept as `data-prophet-src`) and the runtime re-executes
+  the full list in document order at `readyState === "interactive"` — DOM
+  fully parsed, but before `DOMContentLoaded`, so ready-listeners still fire.
+  Identity patches make `script.src` / `getAttribute("src")` report each
+  script's original URL, which is how chunk-path derivation keeps working
+  offline.
 - Scroll tracking, highlight anchoring/painting, bookmark context, in-page
   anchor navigation and external-link interception all live in the runtime;
   external links open in the system browser.

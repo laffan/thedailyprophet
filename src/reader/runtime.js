@@ -353,68 +353,144 @@
     window.XMLHttpRequest = Wrapped;
   })();
 
-  // Dynamically-inserted scripts and images (code-split chunks, map tiles...)
-  // get served from the vault as blob: URLs.
+  /* ---- script identity & replay layer -----------------------------------
+     The serializer defused every executable script (type="prophet/*") so
+     the parser executes none of them. We re-run the full list in document
+     order ourselves — external classics synchronously from vault text —
+     while identity patches make script.src / getAttribute("src") report
+     each script's ORIGINAL URL. Bundler runtimes (webpack, Turbopack)
+     derive chunk paths from that identity; their subsequent dynamic chunk
+     loads go through the patched setters and come out of the vault as
+     blob: URLs. */
   (function () {
-    function mapUrl(v, fallbackMime) {
+    var origGetAttribute = Element.prototype.getAttribute;
+    var origSetAttribute = Element.prototype.setAttribute;
+
+    function isScriptEl(el) {
+      return el.tagName && String(el.tagName).toUpperCase() === "SCRIPT";
+    }
+
+    /** Map an outgoing resource URL to a vault blob, remembering the
+        original URL on the element for identity reads. */
+    function mapUrl(el, v, fallbackMime) {
       var abs = resolveUrl(v);
       if (!abs || !/^https?:/i.test(abs)) return v;
-      return vaultBlobUrl(abs, fallbackMime) || v;
+      var blob = vaultBlobUrl(abs, fallbackMime);
+      if (!blob) return abs; // not vaulted: at least give it its online URL
+      if (el) {
+        try { origSetAttribute.call(el, "data-prophet-src", abs); } catch (e) {}
+      }
+      return blob;
     }
+
     [
-      { proto: window.HTMLScriptElement, mime: "text/javascript" },
-      { proto: window.HTMLImageElement, mime: "image/png" },
+      { ctor: window.HTMLScriptElement, mime: "text/javascript", identity: true },
+      { ctor: window.HTMLImageElement, mime: "image/png", identity: false },
     ].forEach(function (target) {
-      if (!target.proto) return;
-      var desc = Object.getOwnPropertyDescriptor(target.proto.prototype, "src");
+      if (!target.ctor) return;
+      var proto = target.ctor.prototype;
+      var desc = Object.getOwnPropertyDescriptor(proto, "src");
       if (!desc || !desc.set) return;
       try {
-        Object.defineProperty(target.proto.prototype, "src", {
+        Object.defineProperty(proto, "src", {
           configurable: true,
           enumerable: desc.enumerable,
-          get: desc.get,
-          set: function (v) { desc.set.call(this, mapUrl(String(v), target.mime)); },
+          get: target.identity
+            ? function () {
+                var ps = origGetAttribute.call(this, "data-prophet-src");
+                if (ps != null) return ps;
+                return desc.get.call(this);
+              }
+            : desc.get,
+          set: function (v) {
+            desc.set.call(this, mapUrl(this, String(v), target.mime));
+          },
         });
       } catch (e) {}
     });
+
     try {
-      var origSetAttribute = Element.prototype.setAttribute;
+      Element.prototype.getAttribute = function (name) {
+        if (name != null && String(name).toLowerCase() === "src" && isScriptEl(this)) {
+          var ps = origGetAttribute.call(this, "data-prophet-src");
+          if (ps != null) return ps;
+        }
+        return origGetAttribute.call(this, name);
+      };
       Element.prototype.setAttribute = function (name, value) {
-        if (name && String(name).toLowerCase() === "src") {
-          var tag = this.tagName;
-          if (tag === "SCRIPT") value = mapUrl(String(value), "text/javascript");
-          else if (tag === "IMG") value = mapUrl(String(value), "image/png");
+        if (name != null && String(name).toLowerCase() === "src") {
+          if (isScriptEl(this)) value = mapUrl(this, String(value), "text/javascript");
+          else if (this.tagName && String(this.tagName).toUpperCase() === "IMG") {
+            value = mapUrl(this, String(value), "image/png");
+          }
         }
         return origSetAttribute.call(this, name, value);
       };
     } catch (e) {}
-    // Module scripts were defused to type="prophet/module" at capture time
-    // (a parser-inserted module would fetch before we could intercept it).
-    // Revive them from the vault in document order.
-    function reviveModules() {
-      var defused = document.querySelectorAll('script[type="prophet/module"]');
-      for (var i = 0; i < defused.length; i++) {
-        var old = defused[i];
-        var src = old.getAttribute("src") || old.getAttribute("data-prophet-src");
-        var s = document.createElement("script");
-        s.type = "module";
-        if (src) {
-          var mapped = mapUrl(src, "text/javascript");
-          if (mapped === src && !/^blob:|^data:/i.test(String(mapped))) {
-            // Not in the vault: keep the absolute URL (works online, inert offline).
-            mapped = src;
-          }
-          s.setAttribute("src", String(mapped));
+
+    // Post-parse document.write would blow the document away; insert inline.
+    try {
+      var docWrite = function () {
+        var html = Array.prototype.join.call(arguments, "");
+        try {
+          var cs = document.currentScript;
+          if (cs && cs.parentNode) cs.insertAdjacentHTML("beforebegin", html);
+        } catch (e) {}
+      };
+      document.write = docWrite;
+      document.writeln = docWrite;
+    } catch (e) {}
+
+    function executeOne(old) {
+      var t = old.getAttribute("type") || "";
+      var isModule = t === "prophet/module" || t === "prophet/module-inline";
+      var srcUrl = origGetAttribute.call(old, "data-prophet-src");
+      var s = document.createElement("script");
+      if (isModule) s.type = "module";
+      if (srcUrl) {
+        origSetAttribute.call(s, "data-prophet-src", srcUrl);
+        var hit = vaultLookup("GET", srcUrl, null);
+        if (hit && !isModule) {
+          // Synchronous execution; identity patches report the original URL
+          // to document.currentScript.src / getAttribute("src").
+          s.textContent = vaultText(hit);
         } else {
-          s.textContent = old.textContent;
+          // Modules (blob keeps them fetchable) or non-vaulted scripts.
+          var url = hit ? vaultBlobUrl(srcUrl, "text/javascript") || srcUrl : srcUrl;
+          origSetAttribute.call(s, "src", url);
         }
-        old.parentNode.replaceChild(s, old);
+      } else {
+        s.textContent = old.textContent;
+      }
+      old.parentNode.replaceChild(s, old); // classic inline runs synchronously here
+      if (srcUrl && !origGetAttribute.call(s, "src")) {
+        // Already-started scripts ignore src changes; expose the original
+        // URL for attribute-based scans (querySelector('script[src...]')).
+        try { origSetAttribute.call(s, "src", srcUrl); } catch (e) {}
       }
     }
+
+    function replayAll() {
+      var defused = document.querySelectorAll('script[type^="prophet/"]');
+      var list = [];
+      for (var i = 0; i < defused.length; i++) list.push(defused[i]);
+      for (var j = 0; j < list.length; j++) {
+        try { executeOne(list[j]); } catch (e) {}
+      }
+    }
+
+    // Run with the DOM fully parsed but BEFORE DOMContentLoaded dispatches,
+    // so the scripts' ready-listeners still fire (spec: readystatechange to
+    // "interactive" precedes the DOMContentLoaded event).
     if (document.readyState === "loading") {
-      document.addEventListener("DOMContentLoaded", reviveModules);
+      document.addEventListener("readystatechange", function h() {
+        if (document.readyState !== "loading") {
+          document.removeEventListener("readystatechange", h);
+          replayAll();
+        }
+      });
     } else {
-      reviveModules();
+      replayAll();
     }
   })();
 

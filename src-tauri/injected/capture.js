@@ -825,45 +825,42 @@
     if (clone.parentNode) clone.parentNode.replaceChild(replacement, clone);
   }
 
+  /**
+   * Scripts are never inlined-in-place: bundler runtimes (webpack,
+   * Turbopack...) self-identify through their script tag's src URL, and
+   * chunk registration breaks if that identity is lost. Instead every
+   * executable script is DEFUSED (type="prophet/*", content in the vault,
+   * original URL in data-prophet-src) and the reader runtime re-executes
+   * the whole list in document order with identity patches in place.
+   */
   function handleScript(live, clone, jobs, opts) {
+    var type = (live.getAttribute("type") || "").toLowerCase().trim();
     if (!opts.includeScripts) {
-      var type = (live.getAttribute("type") || "").toLowerCase();
       var keep = type === "application/json" || type === "application/ld+json" || type === "importmap";
       if (!keep && clone.parentNode) clone.parentNode.removeChild(clone);
       return;
     }
+    var isModule = type === "module";
+    var executable = !type || isModule || /javascript|ecmascript/.test(type);
+    if (!executable) return; // data blocks (json, ld+json, importmap...) stay verbatim
     clone.removeAttribute("integrity");
     clone.removeAttribute("crossorigin");
     clone.removeAttribute("nonce");
     var src = live.getAttribute("src");
-    if (!src) return;
-    var abs = absUrl(src);
-    if (!abs) return;
-    var type2 = (live.getAttribute("type") || "").toLowerCase();
-    clone.setAttribute("data-prophet-src", abs);
-    if (type2 === "module") {
-      // Parser-inserted module scripts would fetch their src before the
-      // reader runtime could intercept them. Defuse the type; the runtime
-      // revives them from the vault as blob: URLs at load time.
-      clone.setAttribute("type", "prophet/module");
-      clone.setAttribute("src", abs);
-      jobs.push(function () {
-        return fetchResource(abs).then(function (r) {
-          if (r && r.buf) recorderPutForce("GET " + abs, abs, 200, r.mime, r.buf);
-        });
-      });
+    if (!src) {
+      clone.setAttribute("type", isModule ? "prophet/module-inline" : "prophet/inline");
       return;
     }
+    var abs = absUrl(src);
+    if (!abs) return;
+    clone.setAttribute("type", isModule ? "prophet/module" : "prophet/classic");
+    clone.setAttribute("data-prophet-src", abs);
+    clone.removeAttribute("src");
+    clone.removeAttribute("defer");
+    clone.removeAttribute("async");
     jobs.push(function () {
-      return fetchText(abs).then(function (txt) {
-        if (txt == null) {
-          clone.setAttribute("src", abs); // reader runtime may still find it in the vault
-          return;
-        }
-        clone.removeAttribute("src");
-        clone.removeAttribute("defer");
-        // Guard: inline scripts must not contain a closing script tag.
-        clone.textContent = txt.replace(/<\/script/gi, "<\\/script");
+      return fetchResource(abs).then(function (r) {
+        if (r && r.buf) recorderPutForce("GET " + abs, abs, 200, r.mime, r.buf);
       });
     });
   }
@@ -938,7 +935,8 @@
         if (seen[e.name]) continue;
         if (RECORDER.entries.has("GET " + e.name)) continue;
         var it = e.initiatorType;
-        if (it === "script" || it === "fetch" || it === "xmlhttprequest" || it === "other" || it === "img") {
+        // "link" covers rel=preload'd chunks (Next.js preloads then reuses).
+        if (it === "script" || it === "link" || it === "fetch" || it === "xmlhttprequest" || it === "other" || it === "img") {
           seen[e.name] = true;
           urls.push(e.name);
         }
