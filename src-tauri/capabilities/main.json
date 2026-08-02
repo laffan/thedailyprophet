@@ -20,6 +20,12 @@
     "allow-platform",
     "allow-export-document",
     "allow-import-document",
+    "allow-render-annotations",
+    "allow-export-annotations",
+    "allow-get-settings",
+    "allow-set-settings",
+    "allow-sync-now",
+    "allow-default-sync-folder",
     "allow-capture-start",
     "allow-capture-control",
     "allow-capture-set-bounds"

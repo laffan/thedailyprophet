@@ -906,3 +906,113 @@ button {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ---- settings ---- */
+
+.settings-view {
+  flex: 1;
+  overflow-y: auto;
+  width: 100%;
+}
+.settings-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--paper-raised);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.settings-head h2 {
+  flex: 1;
+  text-align: center;
+  font-family: var(--serif);
+  font-size: 19px;
+}
+.settings-head-spacer {
+  width: 84px;
+}
+.settings-body {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 26px 22px 60px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.settings-card {
+  background: var(--paper-raised);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  box-shadow: var(--shadow-soft);
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: flex-start;
+}
+.settings-title {
+  font-family: var(--serif);
+  font-size: 17px;
+}
+.settings-desc {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--ink-soft);
+}
+.settings-folder {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+.settings-path {
+  display: block;
+  font-size: 12px;
+  padding: 9px 12px;
+  border-radius: 6px;
+  background: rgba(128, 106, 66, 0.1);
+  border: 1px solid var(--rule);
+  word-break: break-all;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.settings-folder-actions {
+  display: flex;
+  gap: 8px;
+}
+.settings-check {
+  margin-top: 2px;
+}
+.settings-sync-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.settings-when {
+  font-size: 12.5px;
+}
+.settings-note {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink-soft);
+  border-left: 3px solid var(--rule-strong);
+  padding-left: 12px;
+}
+.is-busy {
+  opacity: 0.75;
+  cursor: progress;
+}
+
+/* ---- annotation browser actions ---- */
+
+.sidebar-actions {
+  display: flex;
+  gap: 8px;
+  padding: 10px;
+  border-top: 1px solid var(--rule);
+  flex-wrap: wrap;
+}

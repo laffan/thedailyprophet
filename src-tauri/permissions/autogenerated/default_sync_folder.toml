@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-default-sync-folder"
+description = "Enables the default_sync_folder command without any pre-configured scope."
+commands.allow = ["default_sync_folder"]
+
+[[permission]]
+identifier = "deny-default-sync-folder"
+description = "Denies the default_sync_folder command without any pre-configured scope."
+commands.deny = ["default_sync_folder"]

@@ -12,6 +12,7 @@ import { el, toast, fmtDate, fmtBytes, domainOf } from "../util";
 import { coverEl } from "../covers";
 import { promptModal, confirmModal } from "../modal";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { exportAnnotationsFlow } from "../annotations";
 
 export function mountLibrary(root: HTMLElement, ctx: AppContext): () => void {
   let disposed = false;
@@ -100,7 +101,16 @@ export function mountLibrary(root: HTMLElement, ctx: AppContext): () => void {
     el(
       "header.masthead",
       null,
-      el("div.masthead-row", null, el("div.masthead-spacer"), el("h1.masthead-title", null, "The Daily Prophet"), el("div.masthead-actions", null, importBtn)),
+      el("div.masthead-row", null, el("div.masthead-spacer"), el("h1.masthead-title", null, "The Daily Prophet"), el(
+        "div.masthead-actions",
+        null,
+        importBtn,
+        el(
+          "button.icon-btn",
+          { title: "Settings", onclick: () => ctx.navigate({ name: "settings" }) },
+          gearIcon(),
+        ),
+      )),
       el("p.masthead-sub", null, `${today} — captured stories, readable forever`),
       el("div.masthead-rule"),
     ),
@@ -179,10 +189,17 @@ export function mountLibrary(root: HTMLElement, ctx: AppContext): () => void {
                 void refresh();
               }
             }),
-            menuItem("Export…", async () => {
+            menuItem("Export document…", async () => {
               closeMenu();
               await exportFlow(doc);
             }),
+            menuItem(
+              `Export highlights${hlCount(doc) ? ` (${hlCount(doc)})` : ""}…`,
+              async () => {
+                closeMenu();
+                await exportAnnotationsFlow(doc.meta.id, doc.meta.title);
+              },
+            ),
             menuItem("Delete", async () => {
               closeMenu();
               const ok = await confirmModal({
@@ -226,6 +243,22 @@ export function mountLibrary(root: HTMLElement, ctx: AppContext): () => void {
         `${domainOf(doc.meta.sourceUrl)} · ${pct > 0 ? `${pct}%` : "new"} · ${fmtDate(doc.meta.createdAt)} · ${fmtBytes(doc.meta.sizeBytes)}`,
       ),
     );
+  }
+
+  function hlCount(doc: DocSummary): number {
+    return doc.state?.highlights?.length ?? 0;
+  }
+
+  function gearIcon(): HTMLElement {
+    const span = document.createElement("span");
+    span.className = "svg-icon";
+    span.innerHTML =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+      'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<circle cx="12" cy="12" r="3"/>' +
+      '<path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/>' +
+      "</svg>";
+    return span;
   }
 
   function menuItem(label: string, action: () => void, danger = false): HTMLElement {

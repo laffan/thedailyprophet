@@ -6,11 +6,13 @@ import { toast } from "./util";
 import { mountLibrary } from "./views/library";
 import { mountCapture } from "./views/capture";
 import { mountReader } from "./views/reader";
+import { mountSettings } from "./views/settings";
 
 export type Route =
   | { name: "library" }
   | { name: "capture"; url: string }
-  | { name: "reader"; id: string };
+  | { name: "reader"; id: string }
+  | { name: "settings" };
 
 export interface AppContext {
   navigate: (route: Route) => void;
@@ -35,6 +37,7 @@ function navigate(route: Route): void {
   const ctx: AppContext = { navigate };
   if (route.name === "library") cleanup = mountLibrary(root, ctx);
   else if (route.name === "capture") cleanup = mountCapture(root, ctx, route.url);
+  else if (route.name === "settings") cleanup = mountSettings(root, ctx);
   else cleanup = mountReader(root, ctx, route.id);
 }
 

@@ -12,6 +12,7 @@ import {
 import { el, toast, debounce, uid, domainOf, clamp } from "../util";
 import { promptModal } from "../modal";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { exportAnnotationsFlow, copyAnnotations } from "../annotations";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import RUNTIME_SRC from "../reader/runtime.js?raw";
 
@@ -137,7 +138,17 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
             await exportFlow();
           },
         },
-        "Export…",
+        "Export document…",
+      ),
+      el(
+        "button.card-menu-item",
+        {
+          onclick: async () => {
+            closeMenus();
+            if (doc) await exportAnnotationsFlow(id, doc.meta.title);
+          },
+        },
+        "Export highlights…",
       ),
       el(
         "button.card-menu-item",
@@ -385,6 +396,27 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
       ),
     );
     const list = el("div.sidebar-list");
+    const actions =
+      sidebarTab === "highlights" && state.highlights.length
+        ? el(
+            "div.sidebar-actions",
+            null,
+            el(
+              "button.btn.btn-ghost.btn-small",
+              {
+                onclick: () => {
+                  if (doc) void exportAnnotationsFlow(id, doc.meta.title);
+                },
+              },
+              "Export…",
+            ),
+            el(
+              "button.btn.btn-ghost.btn-small",
+              { onclick: () => void copyAnnotations(id) },
+              "Copy as Markdown",
+            ),
+          )
+        : null;
 
     if (sidebarTab === "bookmarks") {
       if (!state.bookmarks.length) {
@@ -478,6 +510,7 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
       }
     }
     sidebar.append(tabs, list);
+    if (actions) sidebar.append(actions);
   }
 
   // ---- iframe messages ---------------------------------------------------

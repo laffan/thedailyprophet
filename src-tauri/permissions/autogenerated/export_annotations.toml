@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-export-annotations"
+description = "Enables the export_annotations command without any pre-configured scope."
+commands.allow = ["export_annotations"]
+
+[[permission]]
+identifier = "deny-export-annotations"
+description = "Denies the export_annotations command without any pre-configured scope."
+commands.deny = ["export_annotations"]

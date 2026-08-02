@@ -62,6 +62,17 @@ Built on [Tauri 2.0](https://v2.tauri.app).
   *text quote* (exact text + surrounding context, à la Hypothesis), so they
   survive re-renders inside interactive snapshots. Orphaned highlights are
   kept and flagged instead of silently dropped.
+- **Shared folder sync** — point every device at one folder (iCloud Drive,
+  Dropbox, a network share) in Settings. Documents are copied out, anything
+  new found there is copied in, and reading state is *merged*: highlights and
+  bookmarks are unioned by id and the more recently read device wins the
+  scroll position, so annotating on two devices never loses one side's work.
+  Optionally runs automatically after each capture or import.
+- **Annotation export** — save a document's highlights and bookmarks as
+  Markdown, JSON, CSV or plain text, from the shelf's ⋯ menu or the reader.
+  The reader's sidebar doubles as an annotation browser: highlights are
+  listed in document order, grouped by page for multi-page documents, and
+  can be exported or copied as Markdown from there.
 - **Portable documents** — export any story as a `.prophet` file and open it
   in another instance of the app, bookmarks and highlights included. The
   app registers the `.prophet` file association; double-click or drag onto
@@ -103,6 +114,20 @@ npm run tauri ios build  # archive for distribution
 
 You'll need Xcode and an Apple Developer signing identity configured; see
 the [Tauri iOS guide](https://v2.tauri.app/develop/#developing-your-mobile-application).
+
+**Sync on iPadOS.** Tauri's iOS dialog plugin has no folder picker (it only
+copies chosen *files* into a temp directory), so the sync folder there is the
+app's own Documents folder rather than one you browse to. To make that folder
+visible in the Files app — which is what lets you move or copy it into iCloud
+Drive — add these to the generated `Info.plist` after `tauri ios init`:
+
+```xml
+<key>UIFileSharingEnabled</key><true/>
+<key>LSSupportsOpeningDocumentsInPlace</key><true/>
+```
+
+The Mac side has a real folder picker, so point it at the same iCloud folder
+and the two libraries meet there.
 
 ## How capture works
 
@@ -191,6 +216,12 @@ between machines is stable; otherwise a fresh id is minted.
   the document CSP (usually a font or analytics beacon, so it degrades
   gracefully).
 - Archives are capped at 512 MB, and at most 60 included pages per document.
+- Sync merges annotations by union, so deleting a highlight on one device
+  does not delete it on the others — it returns on the next sync. Sync is
+  also a folder mirror, not a live watcher: it runs when you press **Sync
+  now**, or after a capture/import when automatic sync is on.
+- On iPadOS the sync folder is the app's own Files folder (see above), not
+  an arbitrary folder you pick.
 - Included pages are loaded in a hidden frame and scrolled, but only assets
   the page requests on its own are captured. Something that loads solely in
   response to an interaction nobody performed (a sound tied to one button,

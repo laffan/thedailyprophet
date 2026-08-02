@@ -384,6 +384,7 @@ pub async fn capture_archive_finish(
     };
 
     crate::protocol::invalidate(&summary.meta.id);
+    crate::sync::auto_sync(&app);
     let _ = app.emit("capture://done", &summary);
     if let Some(wv) = app.get_webview("capture") {
         let _ = wv.close();

@@ -75,3 +75,53 @@ export function captureSnapshot(options: {
 }): Promise<void> {
   return invoke("capture_control", { action: "snapshot", options });
 }
+
+// ---- settings & folder sync -------------------------------------------
+
+export interface Settings {
+  syncFolder: string | null;
+  autoSync: boolean;
+  lastSyncAt: number;
+}
+
+export interface SyncReport {
+  pushed: number;
+  pulled: number;
+  merged: number;
+  unchanged: number;
+  errors: string[];
+  folder: string;
+}
+
+export function getSettings(): Promise<Settings> {
+  return invoke("get_settings");
+}
+
+export function setSettings(settings: Settings): Promise<Settings> {
+  return invoke("set_settings", { settings });
+}
+
+export function syncNow(): Promise<SyncReport> {
+  return invoke("sync_now");
+}
+
+/** Where documents go when the platform can't offer a folder picker (iOS). */
+export function defaultSyncFolder(): Promise<string> {
+  return invoke("default_sync_folder");
+}
+
+// ---- annotations ------------------------------------------------------
+
+export type AnnotationFormat = "markdown" | "json" | "csv" | "txt";
+
+export function renderAnnotations(id: string, format: AnnotationFormat): Promise<string> {
+  return invoke("render_annotations", { id, format });
+}
+
+export function exportAnnotations(
+  id: string,
+  dest: string,
+  format: AnnotationFormat,
+): Promise<string> {
+  return invoke("export_annotations", { id, dest, format });
+}

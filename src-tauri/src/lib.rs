@@ -1,7 +1,9 @@
+mod annotations;
 mod archive;
 mod capture;
 mod library;
 mod protocol;
+mod sync;
 mod transfer;
 
 // Emitter is only exercised in the RunEvent::Opened handler (macOS/iOS).
@@ -42,6 +44,12 @@ pub fn run() {
             library::platform,
             transfer::export_document,
             transfer::import_document,
+            annotations::render_annotations,
+            annotations::export_annotations,
+            sync::get_settings,
+            sync::set_settings,
+            sync::sync_now,
+            sync::default_sync_folder,
             capture::capture_start,
             capture::capture_set_bounds,
             capture::capture_control,
@@ -87,6 +95,7 @@ pub fn run() {
                 if let Ok(path) = url.to_file_path() {
                     match transfer::import_from_path(app_handle, &path) {
                         Ok(summary) => {
+                            sync::auto_sync(app_handle);
                             let _ = app_handle.emit("library://imported", summary);
                         }
                         Err(e) => {

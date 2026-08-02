@@ -21,11 +21,6 @@ const FORMAT_MARKER: &[u8] = br#"{"format":"prophet","version":1}"#;
 
 #[tauri::command]
 pub fn export_document(app: AppHandle, id: String, dest: String) -> Result<String, String> {
-    let dir = library::doc_dir(&app, &id)?;
-    if !dir.exists() {
-        return Err("document not found".into());
-    }
-
     let mut dest_path = PathBuf::from(&dest);
     let has_ext = dest_path
         .extension()
@@ -34,8 +29,20 @@ pub fn export_document(app: AppHandle, id: String, dest: String) -> Result<Strin
     if !has_ext {
         dest_path.set_extension("prophet");
     }
+    export_document_to(&app, &id, &dest_path)
+}
 
-    let file = File::create(&dest_path).map_err(|e| format!("could not create file: {e}"))?;
+/// Writes a document to an exact path (used by export and by folder sync).
+pub fn export_document_to(app: &AppHandle, id: &str, dest_path: &Path) -> Result<String, String> {
+    let dir = library::doc_dir(app, id)?;
+    if !dir.exists() {
+        return Err("document not found".into());
+    }
+    if let Some(parent) = dest_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("could not create folder: {e}"))?;
+    }
+
+    let file = File::create(dest_path).map_err(|e| format!("could not create file: {e}"))?;
     let mut zw = ZipWriter::new(file);
     let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
 
@@ -307,4 +314,26 @@ pub fn import_from_path(app: &AppHandle, path: &Path) -> Result<DocSummary, Stri
     library::write_meta(&dir, &meta)?;
 
     library::summary_for(&dir)
+}
+
+
+/// Reads only `state.json` out of a `.prophet` archive (folder sync merges
+/// annotations without touching the document's content).
+pub fn read_state_from_archive(path: &Path) -> Result<Option<serde_json::Value>, String> {
+    let file = File::open(path).map_err(|e| format!("could not open: {e}"))?;
+    let mut zip = match ZipArchive::new(file) {
+        Ok(z) => z,
+        // A .webarchive has no reading state; that isn't an error.
+        Err(_) => return Ok(None),
+    };
+    let mut raw = String::new();
+    match zip.by_name("state.json") {
+        Ok(mut f) => {
+            f.read_to_string(&mut raw).map_err(|e| e.to_string())?;
+        }
+        Err(_) => return Ok(None),
+    }
+    Ok(serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()
+        .filter(|v| v.is_object()))
 }
