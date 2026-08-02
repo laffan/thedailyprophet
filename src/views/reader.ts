@@ -1,5 +1,11 @@
 import type { AppContext } from "../main";
-import { getDocument, getDocumentHtml, saveState, exportDocument } from "../api";
+import {
+  getDocument,
+  getDocumentHtml,
+  saveState,
+  exportDocument,
+  editSetRemovals,
+} from "../api";
 import {
   emptyState,
   HIGHLIGHT_COLORS,
@@ -116,9 +122,140 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
     el("div.reader-tools", null, progressLabel, bookmarkBtn, sidebarBtn, menuBtn),
   );
 
+  const editBar = el("div.edit-bar", { hidden: true });
   const frameWrap = el("div.reader-frame-wrap", null, iframe, popover);
   const layout = el("div.reader-layout", null, frameWrap, sidebar);
-  root.append(el("div.reader-view", null, toolbar, layout));
+  root.append(el("div.reader-view", null, toolbar, editBar, layout));
+
+  // ---- edit mode ---------------------------------------------------------
+
+  let editing = false;
+  let editMode: "remove" | "add" = "remove";
+  let editCounts = { removed: 0, added: [] as Array<{ url: string; label: string }> };
+  let editReqId = 0;
+  const editWaiters = new Map<
+    number,
+    (r: { removed: string[]; added: Array<{ url: string; label: string }>; page: string }) => void
+  >();
+
+  function beginEdit(mode: "remove" | "add"): void {
+    editing = true;
+    editMode = mode;
+    editCounts = { removed: 0, added: [] };
+    post({ type: "edit-begin", mode });
+    renderEditBar();
+  }
+
+  function endEdit(): void {
+    editing = false;
+    post({ type: "edit-end", clear: true });
+    editBar.hidden = true;
+    editBar.innerHTML = "";
+  }
+
+  function renderEditBar(): void {
+    if (!editing) {
+      editBar.hidden = true;
+      return;
+    }
+    editBar.hidden = false;
+    editBar.innerHTML = "";
+    const tab = (mode: "remove" | "add", label: string) =>
+      el(
+        `button.btn.btn-small.edit-tab.${editMode === mode ? "btn-primary" : "btn-ghost"}`,
+        {
+          onclick: () => {
+            editMode = mode;
+            post({ type: "edit-begin", mode });
+            renderEditBar();
+          },
+        },
+        label,
+      );
+    const pending = editCounts.removed + editCounts.added.length;
+    editBar.append(
+      el("div.edit-bar-row", null, tab("remove", "Remove elements"), tab("add", "Add pages")),
+      el(
+        "p.edit-hint",
+        null,
+        editMode === "remove"
+          ? "Click anything in the document to mark it for removal — marked parts turn red. Click again to unmark; ↑ selects the surrounding block."
+          : "Click a link to add its page to this document. Marked links turn green.",
+      ),
+      el(
+        "div.edit-bar-row",
+        null,
+        el(
+          "span.edit-count",
+          null,
+          `${editCounts.removed} to remove · ${editCounts.added.length} page${
+            editCounts.added.length === 1 ? "" : "s"
+          } to add`,
+        ),
+        el("span.edit-spacer"),
+        el("button.btn.btn-ghost.btn-small", { onclick: () => endEdit() }, "Cancel"),
+        el(
+          `button.btn.btn-primary.btn-small.edit-update${pending ? "" : ".is-busy"}`,
+          { onclick: () => void applyEdit(), disabled: pending === 0 },
+          "Update Document",
+        ),
+      ),
+    );
+  }
+
+  function collectEdit(): Promise<{
+    removed: string[];
+    added: Array<{ url: string; label: string }>;
+    page: string;
+  }> {
+    return new Promise((resolve, reject) => {
+      const reqId = ++editReqId;
+      editWaiters.set(reqId, resolve);
+      post({ type: "edit-collect", reqId });
+      setTimeout(() => {
+        if (editWaiters.delete(reqId)) reject(new Error("the document did not respond"));
+      }, 3000);
+    });
+  }
+
+  async function applyEdit(): Promise<void> {
+    let picked;
+    try {
+      picked = await collectEdit();
+    } catch (e) {
+      toast(String(e), "error");
+      return;
+    }
+    const { removed, added, page } = picked;
+    if (!removed.length && !added.length) {
+      endEdit();
+      return;
+    }
+    try {
+      if (removed.length) {
+        await editSetRemovals(id, page || currentPage, removed);
+      }
+    } catch (e) {
+      toast(`Could not save changes: ${e}`, "error");
+      return;
+    }
+    editing = false;
+    editBar.hidden = true;
+
+    if (added.length) {
+      // Fetching new pages needs the network, so hand off to the capture
+      // view, which opens the site with your session.
+      toast(`Fetching ${added.length} page${added.length === 1 ? "" : "s"}…`);
+      ctx.navigate({
+        name: "capture",
+        url: added[0].url,
+        append: { docId: id, urls: added.map((a) => a.url) },
+      });
+      return;
+    }
+    toast(`Removed ${removed.length} element${removed.length === 1 ? "" : "s"}`);
+    iframe.contentWindow?.location.reload();
+  }
 
   function toggleMenu(): void {
     if (menuEl) {
@@ -149,6 +286,16 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
           },
         },
         "Export highlights…",
+      ),
+      el(
+        "button.card-menu-item",
+        {
+          onclick: () => {
+            closeMenus();
+            beginEdit("remove");
+          },
+        },
+        "Edit document…",
       ),
       el(
         "button.card-menu-item",
@@ -611,6 +758,25 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
         if (changed) {
           markDirty();
           renderSidebar();
+        }
+        break;
+      }
+      case "edit-selection":
+        editCounts = {
+          removed: (d.removed as number) ?? 0,
+          added: (d.added as Array<{ url: string; label: string }>) ?? [],
+        };
+        renderEditBar();
+        break;
+      case "edit-result": {
+        const w = editWaiters.get(d.reqId as number);
+        if (w) {
+          editWaiters.delete(d.reqId as number);
+          w(d as unknown as {
+            removed: string[];
+            added: Array<{ url: string; label: string }>;
+            page: string;
+          });
         }
         break;
       }

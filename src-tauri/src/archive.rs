@@ -347,3 +347,23 @@ mod tests {
         println!("converted {} resources -> {}", entries.len(), out);
     }
 }
+
+// ---- post-capture edits ---------------------------------------------------
+
+/// Elements the reader removed after capture, keyed by page path. Kept
+/// separate from `main.html` so the captured page stays exactly as the
+/// server sent it and edits remain reversible.
+pub type Removals = std::collections::BTreeMap<String, Vec<String>>;
+
+pub fn read_removals(dir: &Path) -> Removals {
+    fs::read_to_string(dir.join("cleanup.json"))
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+pub fn write_removals(dir: &Path, removals: &Removals) -> Result<(), String> {
+    let raw = serde_json::to_string(removals).map_err(|e| e.to_string())?;
+    fs::write(dir.join("cleanup.json"), raw)
+        .map_err(|e| format!("could not write cleanup.json: {e}"))
+}

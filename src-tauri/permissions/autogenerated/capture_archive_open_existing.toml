@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-capture-archive-open-existing"
+description = "Enables the capture_archive_open_existing command without any pre-configured scope."
+commands.allow = ["capture_archive_open_existing"]
+
+[[permission]]
+identifier = "deny-capture-archive-open-existing"
+description = "Denies the capture_archive_open_existing command without any pre-configured scope."
+commands.deny = ["capture_archive_open_existing"]

@@ -18,8 +18,13 @@ type Step = "browse" | "cleanup" | "save" | "working";
  * tools live in the sheet header directly above it. (No separate OS window —
  * this is also the only shape that can work on iPad later.)
  */
-export function mountCapture(root: HTMLElement, ctx: AppContext, url: string): () => void {
-  let step: Step = "browse";
+export function mountCapture(
+  root: HTMLElement,
+  ctx: AppContext,
+  url: string,
+  append?: { docId: string; urls: string[] },
+): () => void {
+  let step: Step = append ? "working" : "browse";
   let finished = false;
   let started = false;
   let removedCount = 0;
@@ -206,7 +211,13 @@ export function mountCapture(root: HTMLElement, ctx: AppContext, url: string): (
           "div.capture-actions",
           null,
           el("div.spinner.spinner-small"),
-          el("span.capture-hint", null, "Building your snapshot — inlining styles, images and fonts…"),
+          el(
+            "span.capture-hint",
+            null,
+            append
+              ? "Adding pages to your document — loading each one so its scripts and data come along…"
+              : "Building your snapshot — inlining styles, images and fonts…",
+          ),
         ),
         progressLog,
       );
@@ -370,6 +381,11 @@ export function mountCapture(root: HTMLElement, ctx: AppContext, url: string): (
           render();
         }
       }),
+      await listen<number>("capture://appended", () => {
+        finished = true;
+        toast("Document updated");
+        if (append) ctx.navigate({ name: "reader", id: append.docId });
+      }),
       await listen("capture://closed", () => {
         if (!finished) {
           finished = true;
@@ -384,6 +400,17 @@ export function mountCapture(root: HTMLElement, ctx: AppContext, url: string): (
     try {
       await captureStart(url, slotRect());
       started = true;
+      if (append) {
+        // Give the page a moment to establish its session before harvesting.
+        window.setTimeout(() => {
+          void captureControl("end_cleanup").catch(() => {});
+          void import("../api").then((api) =>
+            api.captureAppendPages(append.docId, append.urls).catch((e) => {
+              toast(`Could not add pages: ${e}`, "error");
+            }),
+          );
+        }, 2500);
+      }
       // Re-broadcast a few times: layout can settle late (fonts, first
       // paint) and the initial native placement may need correcting.
       void sendBounds();

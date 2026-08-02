@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-edit-clear-removals"
+description = "Enables the edit_clear_removals command without any pre-configured scope."
+commands.allow = ["edit_clear_removals"]
+
+[[permission]]
+identifier = "deny-edit-clear-removals"
+description = "Denies the edit_clear_removals command without any pre-configured scope."
+commands.deny = ["edit_clear_removals"]

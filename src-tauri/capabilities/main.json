@@ -28,6 +28,10 @@
     "allow-default-sync-folder",
     "allow-capture-start",
     "allow-capture-control",
-    "allow-capture-set-bounds"
+    "allow-capture-set-bounds",
+    "allow-edit-set-removals",
+    "allow-edit-clear-removals",
+    "allow-capture-archive-open-existing",
+    "allow-capture-archive-commit"
   ]
 }

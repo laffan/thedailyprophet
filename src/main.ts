@@ -10,7 +10,7 @@ import { mountSettings } from "./views/settings";
 
 export type Route =
   | { name: "library" }
-  | { name: "capture"; url: string }
+  | { name: "capture"; url: string; append?: { docId: string; urls: string[] } }
   | { name: "reader"; id: string }
   | { name: "settings" };
 
@@ -36,7 +36,7 @@ function navigate(route: Route): void {
   root.dataset.view = route.name;
   const ctx: AppContext = { navigate };
   if (route.name === "library") cleanup = mountLibrary(root, ctx);
-  else if (route.name === "capture") cleanup = mountCapture(root, ctx, route.url);
+  else if (route.name === "capture") cleanup = mountCapture(root, ctx, route.url, route.append);
   else if (route.name === "settings") cleanup = mountSettings(root, ctx);
   else cleanup = mountReader(root, ctx, route.id);
 }

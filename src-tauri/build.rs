@@ -36,6 +36,10 @@ fn main() {
             "capture_archive_begin",
             "capture_archive_resource",
             "capture_archive_finish",
+            "capture_archive_open_existing",
+            "capture_archive_commit",
+            "edit_set_removals",
+            "edit_clear_removals",
         ])),
     )
     .expect("failed to run tauri-build");

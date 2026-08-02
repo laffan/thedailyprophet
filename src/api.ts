@@ -125,3 +125,23 @@ export function exportAnnotations(
 ): Promise<string> {
   return invoke("export_annotations", { id, dest, format });
 }
+
+// ---- post-capture editing ---------------------------------------------
+
+/** Persists the elements removed from a page; returns the new total. */
+export function editSetRemovals(
+  id: string,
+  page: string,
+  selectors: string[],
+  replace = false,
+): Promise<number> {
+  return invoke("edit_set_removals", { id, page, selectors, replace });
+}
+
+export function editClearRemovals(id: string): Promise<void> {
+  return invoke("edit_clear_removals", { id });
+}
+
+export function captureAppendPages(docId: string, urls: string[]): Promise<void> {
+  return invoke("capture_control", { action: "append_pages", options: { docId, urls } });
+}

@@ -17,6 +17,8 @@
     "allow-capture-failed",
     "allow-capture-archive-begin",
     "allow-capture-archive-resource",
-    "allow-capture-archive-finish"
+    "allow-capture-archive-finish",
+    "allow-capture-archive-open-existing",
+    "allow-capture-archive-commit"
   ]
 }

@@ -48,6 +48,14 @@ Built on [Tauri 2.0](https://v2.tauri.app).
   bookmarks and highlights record which page they belong to, so jumping to
   one navigates there first. A link that was never included shows a short
   explanatory page rather than failing.
+- **Editing after capture** — **Edit document…** in the reader's menu opens
+  an overlay over the document itself. In *Remove elements* mode, clicking
+  anything marks it with a red boundary and tint; in *Add pages* mode,
+  clicking a link marks it green. Nothing changes until **Update Document**,
+  so the whole selection stays reviewable. Removals are stored as selectors
+  in `cleanup.json` and applied when the document is served, leaving the
+  captured page untouched and the edit reversible; added pages are fetched
+  through the capture view so they arrive with their scripts and data.
 - **Safari `.webarchive` import** — `.webarchive` files open directly; the
   format maps onto ours one-to-one.
 - **Library shelf** — covers (from `og:image` or the page's best image, with

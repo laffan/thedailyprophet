@@ -1738,6 +1738,32 @@
       reportCount();
     },
     snapshot: snapshot,
+
+    /** Adds pages to a document that already exists in the library. */
+    appendPages: function (docId, urls) {
+      if (snapshotRunning) return;
+      snapshotRunning = true;
+      RECORDER.active = false;
+      INCLUDED = Object.create(null);
+      includedOrder = [];
+      (urls || []).forEach(function (u) {
+        if (!INCLUDED[u]) {
+          INCLUDED[u] = u;
+          includedOrder.push(u);
+        }
+      });
+      progress("Adding pages", includedOrder.length + " selected");
+      invoke("capture_archive_open_existing", { id: docId })
+        .then(function () { return fetchIncludedPages(); })
+        .then(function () { return invoke("capture_archive_commit"); })
+        .catch(function (e) {
+          invoke("capture_failed", { message: String((e && e.message) || e) }).catch(function () {});
+        })
+        .then(function () {
+          snapshotRunning = false;
+          RECORDER.active = true;
+        });
+    },
   };
 
   window.__PROPHET_CAPTURE__ = api;

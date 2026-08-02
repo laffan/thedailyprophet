@@ -63,6 +63,10 @@ pub fn run() {
             capture::capture_archive_begin,
             capture::capture_archive_resource,
             capture::capture_archive_finish,
+            capture::capture_archive_open_existing,
+            capture::capture_archive_commit,
+            capture::edit_set_removals,
+            capture::edit_clear_removals,
         ])
         .setup(|app| {
             library::ensure_library_dir(app.handle())?;

@@ -250,11 +250,16 @@
      scripts can hydrate against it; the elements the user removed during
      capture are recorded as selectors and stripped here instead. */
   function applyCleanup() {
-    var el = document.getElementById("prophet-cleanup");
-    if (!el) return;
-    var selectors;
-    try { selectors = JSON.parse(el.textContent); } catch (e) { return; }
-    if (!selectors || !selectors.length) return;
+    var selectors = [];
+    ["prophet-cleanup", "prophet-cleanup-extra"].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      try {
+        var parsed = JSON.parse(el.textContent);
+        if (parsed && parsed.length) selectors = selectors.concat(parsed);
+      } catch (e) {}
+    });
+    if (!selectors.length) return;
     function strip() {
       for (var i = 0; i < selectors.length; i++) {
         try {
@@ -641,6 +646,180 @@
       replayAll();
     }
   })();
+
+  /* ---- edit mode -------------------------------------------------------
+     Marking happens in the document itself: elements are outlined and
+     tinted red where they will be removed, and links are outlined green
+     where their page will be added. Nothing changes until the reader
+     presses Update, so the selection stays reviewable. */
+
+  var EDIT = {
+    on: false,
+    mode: "remove", // "remove" | "add"
+    removed: [],    // selectors, in the order they were marked
+    added: [],      // { url, label }
+    styleEl: null,
+    hover: null,
+  };
+
+  var MARK_ATTR = "data-prophet-mark";
+  var HOVER_ATTR = "data-prophet-hover";
+
+  function editStyle() {
+    if (EDIT.styleEl) return;
+    var st = document.createElement("style");
+    st.setAttribute("data-prophet-edit", "1");
+    st.textContent =
+      "[" + MARK_ATTR + '="remove"]{outline:3px solid #c0392b !important;' +
+      "outline-offset:-1px;background-color:rgba(192,57,43,0.22) !important;}" +
+      "[" + MARK_ATTR + '="add"]{outline:3px solid #1d7a4c !important;' +
+      "outline-offset:-1px;background-color:rgba(29,122,76,0.22) !important;}" +
+      "[" + HOVER_ATTR + "]{outline:2px dashed #c0392b !important;outline-offset:-1px;" +
+      "background-color:rgba(192,57,43,0.10) !important;cursor:pointer !important;}" +
+      '[' + HOVER_ATTR + '="add"]{outline-color:#1d7a4c !important;' +
+      "background-color:rgba(29,122,76,0.10) !important;}";
+    (document.head || document.documentElement).appendChild(st);
+    EDIT.styleEl = st;
+  }
+
+  function editCssPath(el) {
+    var parts = [];
+    var node = el;
+    while (node && node.nodeType === 1 && node !== document.documentElement && parts.length < 14) {
+      var parent = node.parentElement;
+      if (!parent) break;
+      var idx = 1;
+      var sib = node;
+      while ((sib = sib.previousElementSibling)) {
+        if (sib.tagName === node.tagName) idx++;
+      }
+      parts.unshift(node.tagName.toLowerCase() + ":nth-of-type(" + idx + ")");
+      node = parent;
+    }
+    return parts.length ? "html > " + parts.join(" > ") : null;
+  }
+
+  function clearHover() {
+    if (EDIT.hover) {
+      EDIT.hover.removeAttribute(HOVER_ATTR);
+      EDIT.hover = null;
+    }
+  }
+
+  function editReport() {
+    send("edit-selection", {
+      removed: EDIT.removed.length,
+      added: EDIT.added.slice(),
+    });
+  }
+
+  function editTargetFor(el) {
+    if (!el || el.nodeType !== 1) return null;
+    if (el === document.body || el === document.documentElement) return null;
+    if (EDIT.mode === "add") return el.closest ? el.closest("a[href]") : null;
+    return el;
+  }
+
+  function onEditMove(e) {
+    if (!EDIT.on) return;
+    var el = editTargetFor(e.target);
+    if (EDIT.mode === "add" && el && !editableLink(el)) el = null;
+    if (el === EDIT.hover) return;
+    clearHover();
+    if (!el) return;
+    el.setAttribute(HOVER_ATTR, EDIT.mode === "add" ? "add" : "remove");
+    EDIT.hover = el;
+  }
+
+  function editableLink(a) {
+    var href = "";
+    try { href = a.href; } catch (err) { return false; }
+    if (!href || href.indexOf(location.origin) !== 0) return false;
+    return href.split("#")[0] !== location.href.split("#")[0];
+  }
+
+  function onEditClick(e) {
+    if (!EDIT.on) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    var el = editTargetFor(e.target);
+    if (!el) return;
+
+    if (EDIT.mode === "add") {
+      if (!editableLink(el)) return;
+      var url = el.href.split("#")[0];
+      var at = EDIT.added.findIndex(function (x) { return x.url === url; });
+      if (at >= 0) {
+        EDIT.added.splice(at, 1);
+        el.removeAttribute(MARK_ATTR);
+      } else {
+        EDIT.added.push({
+          url: url,
+          label: (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 90) || url,
+        });
+        el.setAttribute(MARK_ATTR, "add");
+      }
+      editReport();
+      return;
+    }
+
+    if (el.getAttribute(MARK_ATTR) === "remove") {
+      // Clicking a marked element unmarks it.
+      el.removeAttribute(MARK_ATTR);
+      var sel = editCssPath(el);
+      EDIT.removed = EDIT.removed.filter(function (s2) { return s2 !== sel; });
+    } else {
+      var path = editCssPath(el);
+      if (!path) return;
+      el.setAttribute(MARK_ATTR, "remove");
+      if (EDIT.removed.indexOf(path) === -1) EDIT.removed.push(path);
+    }
+    clearHover();
+    editReport();
+  }
+
+  function onEditKey(e) {
+    if (!EDIT.on) return;
+    if (e.key === "ArrowUp" && EDIT.mode === "remove" && EDIT.hover) {
+      var parent = EDIT.hover.parentElement;
+      if (parent && parent !== document.body && parent !== document.documentElement) {
+        e.preventDefault();
+        clearHover();
+        parent.setAttribute(HOVER_ATTR, "remove");
+        EDIT.hover = parent;
+      }
+    }
+  }
+
+  function editBegin(mode) {
+    editStyle();
+    EDIT.mode = mode === "add" ? "add" : "remove";
+    clearHover();
+    if (EDIT.on) {
+      editReport();
+      return;
+    }
+    EDIT.on = true;
+    document.addEventListener("mousemove", onEditMove, true);
+    document.addEventListener("click", onEditClick, true);
+    document.addEventListener("keydown", onEditKey, true);
+    editReport();
+  }
+
+  function editEnd(clearMarks) {
+    if (!EDIT.on) return;
+    EDIT.on = false;
+    document.removeEventListener("mousemove", onEditMove, true);
+    document.removeEventListener("click", onEditClick, true);
+    document.removeEventListener("keydown", onEditKey, true);
+    clearHover();
+    if (clearMarks) {
+      var marked = document.querySelectorAll("[" + MARK_ATTR + "]");
+      for (var i = 0; i < marked.length; i++) marked[i].removeAttribute(MARK_ATTR);
+      EDIT.removed = [];
+      EDIT.added = [];
+    }
+  }
 
   /* ---- messaging ------------------------------------------------------ */
   /** Which page of a multi-page document this is. */
@@ -1278,6 +1457,20 @@
           y: metrics().y,
           ratio: metrics().ratio,
           docHeight: metrics().docHeight,
+        });
+        break;
+      case "edit-begin":
+        editBegin(d.mode);
+        break;
+      case "edit-end":
+        editEnd(d.clear !== false);
+        break;
+      case "edit-collect":
+        send("edit-result", {
+          reqId: d.reqId,
+          removed: EDIT.removed.slice(),
+          added: EDIT.added.slice(),
+          page: pagePath(),
         });
         break;
       case "clear-selection":

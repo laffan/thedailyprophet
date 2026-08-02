@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-capture-archive-commit"
+description = "Enables the capture_archive_commit command without any pre-configured scope."
+commands.allow = ["capture_archive_commit"]
+
+[[permission]]
+identifier = "deny-capture-archive-commit"
+description = "Denies the capture_archive_commit command without any pre-configured scope."
+commands.deny = ["capture_archive_commit"]

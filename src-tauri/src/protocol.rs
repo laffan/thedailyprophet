@@ -181,7 +181,7 @@ pub fn handle(
                 .header("Content-Type", "text/html; charset=utf-8")
                 .header("Content-Security-Policy", DOC_CSP)
                 .header("Cache-Control", "no-store")
-                .body(inject_runtime(&bytes))
+                .body(inject_runtime(&inject_removals(bytes, &dir, &key)))
                 .unwrap();
         }
     }
@@ -210,7 +210,7 @@ pub fn handle(
                     .header("Content-Type", "text/html; charset=utf-8")
                     .header("Content-Security-Policy", DOC_CSP)
                     .header("Cache-Control", "no-store")
-                    .body(inject_runtime(&bytes))
+                    .body(inject_runtime(&inject_removals(bytes, &dir, &key)))
                     .unwrap();
             }
             let ct = if mime.is_empty() {
@@ -230,5 +230,33 @@ pub fn handle(
         }
         None if is_navigation(&request) => uncaptured_page(&key, &meta.source_url),
         None => not_found("not captured"),
+    }
+}
+
+/// Injects the reader's post-capture removals for a given page, as a JSON
+/// block the runtime applies once the document is up.
+fn inject_removals(html: Vec<u8>, dir: &std::path::Path, page: &str) -> Vec<u8> {
+    let removals = crate::archive::read_removals(dir);
+    let selectors = match removals.get(page) {
+        Some(v) if !v.is_empty() => v,
+        _ => return html,
+    };
+    let payload = match serde_json::to_string(selectors) {
+        Ok(p) => p.replace('<', "\\u003c"),
+        Err(_) => return html,
+    };
+    let tag =
+        format!(r#"<script type="application/json" id="prophet-cleanup-extra">{payload}</script>"#);
+    let text = String::from_utf8_lossy(&html).into_owned();
+    let at = text.to_lowercase().rfind("</body>");
+    match at {
+        Some(i) => {
+            let mut out = String::with_capacity(text.len() + tag.len());
+            out.push_str(&text[..i]);
+            out.push_str(&tag);
+            out.push_str(&text[i..]);
+            out.into_bytes()
+        }
+        None => (text + &tag).into_bytes(),
     }
 }

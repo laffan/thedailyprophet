@@ -118,6 +118,16 @@ pub async fn capture_control(
         "begin_include" => format!("{NS}.beginInclude();"),
         "include_current" => format!("{NS}.includeCurrent();"),
         "clear_included" => format!("{NS}.clearIncluded();"),
+        "append_pages" => {
+            let opts = options.unwrap_or_else(|| Value::Object(Default::default()));
+            let doc_id = opts.get("docId").and_then(|v| v.as_str()).unwrap_or("");
+            if !library::valid_id(doc_id) {
+                return Err("invalid document id".into());
+            }
+            let urls = serde_json::to_string(opts.get("urls").unwrap_or(&Value::Null))
+                .map_err(|e| e.to_string())?;
+            format!("{NS}.appendPages({}, {urls});", serde_json::to_string(doc_id).unwrap())
+        }
         "undo" => format!("{NS}.undo();"),
         "restore_all" => format!("{NS}.restoreAll();"),
         "snapshot" => {
@@ -390,6 +400,92 @@ pub async fn capture_archive_finish(
         let _ = wv.close();
     }
     Ok(summary)
+}
+
+/// Records the elements the reader removed after capture. Selectors are
+/// stored per page and applied when the document is served.
+#[tauri::command]
+pub fn edit_set_removals(
+    app: AppHandle,
+    id: String,
+    page: String,
+    selectors: Vec<String>,
+    replace: bool,
+) -> Result<u32, String> {
+    let dir = library::doc_dir(&app, &id)?;
+    if !dir.exists() {
+        return Err("document not found".into());
+    }
+    let mut removals = crate::archive::read_removals(&dir);
+    let entry = removals.entry(page).or_default();
+    if replace {
+        entry.clear();
+    }
+    for sel in selectors {
+        let sel = sel.trim().to_string();
+        if !sel.is_empty() && !entry.contains(&sel) {
+            entry.push(sel);
+        }
+    }
+    let total = removals.values().map(|v| v.len() as u32).sum();
+    crate::archive::write_removals(&dir, &removals)?;
+    crate::protocol::invalidate(&id);
+    crate::sync::auto_sync(&app);
+    Ok(total)
+}
+
+/// Clears every post-capture removal, restoring the document as captured.
+#[tauri::command]
+pub fn edit_clear_removals(app: AppHandle, id: String) -> Result<(), String> {
+    let dir = library::doc_dir(&app, &id)?;
+    crate::archive::write_removals(&dir, &Default::default())?;
+    crate::protocol::invalidate(&id);
+    crate::sync::auto_sync(&app);
+    Ok(())
+}
+
+/// Stages an existing document so newly captured resources are appended to
+/// it — this is how pages get added to a document after the fact.
+#[tauri::command]
+pub fn capture_archive_open_existing(
+    app: AppHandle,
+    state: tauri::State<'_, Staging>,
+    id: String,
+) -> Result<(), String> {
+    let dir = library::doc_dir(&app, &id)?;
+    if !dir.exists() {
+        return Err("document not found".into());
+    }
+    let entries = crate::archive::read_manifest(&dir);
+    let mut slot = state.inner.lock().map_err(|_| "staging poisoned")?;
+    *slot = Some(StagingArchive {
+        id,
+        dir,
+        main_url: String::new(),
+        entries,
+        bytes: 0,
+    });
+    Ok(())
+}
+
+/// Writes the appended resources back into the existing document.
+#[tauri::command]
+pub fn capture_archive_commit(
+    app: AppHandle,
+    state: tauri::State<'_, Staging>,
+) -> Result<u32, String> {
+    let (id, dir, entries) = {
+        let mut slot = state.inner.lock().map_err(|_| "staging poisoned")?;
+        let st = slot.take().ok_or("no document is staged")?;
+        (st.id, st.dir, st.entries)
+    };
+    let added = entries.len() as u32;
+    crate::archive::write_manifest(&dir, &entries)?;
+    crate::protocol::invalidate(&id);
+    crate::sync::auto_sync(&app);
+    let _ = app.emit("library://changed", ());
+    let _ = app.emit("capture://appended", added);
+    Ok(added)
 }
 
 /// Final delivery: persist the snapshot, tell the main window, close capture.
