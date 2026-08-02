@@ -53,18 +53,18 @@ export function mountLibrary(root: HTMLElement, ctx: AppContext): () => void {
     if (e.key === "Enter") startCapture();
   });
 
-  const captureBar = el(
-    "div.capture-bar",
-    null,
-    urlInput,
-    el("button.btn.btn-primary", { onclick: startCapture }, "Capture"),
+  const settingsBtn = el(
+    "button.icon-btn",
+    { title: "Settings", onclick: () => ctx.navigate({ name: "settings" }) },
+    gearIcon(),
   );
 
   const shelf = el("div.shelf", null, el("p.muted", null, "Loading library…"));
 
   const importBtn = el(
-    "button.btn.btn-ghost",
+    "button.icon-btn",
     {
+      title: "Import a .prophet or .webarchive file",
       onclick: async () => {
         const picked = await openDialog({
           multiple: true,
@@ -87,34 +87,22 @@ export function mountLibrary(root: HTMLElement, ctx: AppContext): () => void {
         void refresh();
       },
     },
-    "Import…",
+    importIcon(),
   );
-
-  const today = new Date().toLocaleDateString(undefined, {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
 
   root.append(
     el(
       "header.masthead",
       null,
-      el("div.masthead-row", null, el("div.masthead-spacer"), el("h1.masthead-title", null, "The Daily Prophet"), el(
-        "div.masthead-actions",
+      el(
+        "div.capture-bar",
         null,
-        importBtn,
-        el(
-          "button.icon-btn",
-          { title: "Settings", onclick: () => ctx.navigate({ name: "settings" }) },
-          gearIcon(),
-        ),
-      )),
-      el("p.masthead-sub", null, `${today} — captured stories, readable forever`),
+        urlInput,
+        el("button.btn.btn-primary", { onclick: startCapture }, "Capture"),
+        el("div.masthead-actions", null, importBtn, settingsBtn),
+      ),
       el("div.masthead-rule"),
     ),
-    el("section.capture-section", null, captureBar),
     shelf,
   );
 
@@ -249,16 +237,29 @@ export function mountLibrary(root: HTMLElement, ctx: AppContext): () => void {
     return doc.state?.highlights?.length ?? 0;
   }
 
-  function gearIcon(): HTMLElement {
+  function importIcon(): HTMLElement {
+    return iconEl(
+      '<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/>' +
+        '<path d="M5 21h14a1 1 0 0 0 1-1v-4"/><path d="M4 16v4a1 1 0 0 0 1 1"/>',
+    );
+  }
+
+  function iconEl(paths: string): HTMLElement {
     const span = document.createElement("span");
     span.className = "svg-icon";
     span.innerHTML =
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
       'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-      '<circle cx="12" cy="12" r="3"/>' +
-      '<path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/>' +
+      paths +
       "</svg>";
     return span;
+  }
+
+  function gearIcon(): HTMLElement {
+    return iconEl(
+      '<circle cx="12" cy="12" r="3"/>' +
+      '<path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/>',
+    );
   }
 
   function menuItem(label: string, action: () => void, danger = false): HTMLElement {

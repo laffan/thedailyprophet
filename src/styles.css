@@ -141,34 +141,21 @@ button {
 /* ---- masthead ---- */
 
 .masthead {
-  padding: 34px 40px 0;
-  text-align: center;
+  padding: 22px 40px 0;
 }
-.masthead-row {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
+.masthead .capture-bar {
+  max-width: 940px;
+  margin: 0 auto;
   align-items: center;
 }
 .masthead-actions {
-  justify-self: end;
-}
-.masthead-title {
-  font-family: var(--serif);
-  font-weight: 700;
-  font-size: clamp(30px, 4.4vw, 44px);
-  letter-spacing: 0.02em;
-  font-variant: small-caps;
-}
-.masthead-sub {
-  margin-top: 6px;
-  font-family: var(--serif);
-  font-style: italic;
-  font-size: 13.5px;
-  color: var(--ink-soft);
+  display: flex;
+  gap: 2px;
+  flex: none;
 }
 .masthead-rule {
-  margin: 16px auto 0;
-  max-width: 860px;
+  margin: 18px auto 0;
+  max-width: 940px;
   border-top: 2.5px solid var(--rule-strong);
   border-bottom: 1px solid var(--rule-strong);
   height: 5px;
@@ -176,15 +163,10 @@ button {
 
 /* ---- capture bar ---- */
 
-.capture-section {
-  padding: 26px 40px 4px;
-  display: flex;
-  justify-content: center;
-}
 .capture-bar {
   display: flex;
   gap: 10px;
-  width: min(720px, 100%);
+  width: 100%;
 }
 .capture-input,
 .text-input,

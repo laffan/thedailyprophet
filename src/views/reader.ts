@@ -655,6 +655,11 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
       } catch {
         /* keep root */
       }
+      // Resume on the page that was last being read. This is what lets
+      // another device pick up a multi-page document where you left off.
+      if (state.lastPage && state.lastPage !== path && state.pages?.[state.lastPage]) {
+        path = state.lastPage;
+      }
       iframe.src = `prophet://${id}${path}`;
       return;
     }

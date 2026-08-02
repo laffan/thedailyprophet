@@ -706,8 +706,23 @@
     return de;
   }
 
+  /** Switch the tracked scroller, keeping the parent informed. */
+  function adoptRoot(el, isDocument) {
+    if (!el || scrollRoot === el) return;
+    scrollRoot = el;
+    rootIsDocument = !!isDocument;
+  }
+
+  /** Re-run detection now that the page has had a chance to lay out. */
+  function refreshScrollRoot() {
+    var found = findScrollRoot();
+    // Never downgrade away from a root that is genuinely scrolling.
+    if (scrollRoot && scrollRoot.scrollTop > 0 && scrollRoot !== found) return;
+    adoptRoot(found, rootIsDocument);
+  }
+
   function metrics() {
-    var r = scrollRoot;
+    var r = scrollRoot || document.scrollingElement || document.documentElement;
     var max = Math.max(1, r.scrollHeight - r.clientHeight);
     return {
       y: r.scrollTop,
@@ -1031,16 +1046,42 @@
     started = true;
     scrollRoot = findScrollRoot();
 
-    var scrollTarget = rootIsDocument ? window : scrollRoot;
+    // Scroll tracking listens in the capture phase on the document, so it
+    // hears whichever element actually scrolls. Deciding that up front is
+    // unreliable: an app-rendered page has barely laid out when this runs,
+    // and its real scroller may not exist yet.
     var pending = false;
-    scrollTarget.addEventListener("scroll", function () {
-      if (pending) return;
-      pending = true;
-      requestAnimationFrame(function () {
-        pending = false;
-        send("scroll", metrics());
-      });
-    }, { passive: true });
+    document.addEventListener(
+      "scroll",
+      function (e) {
+        var t = e.target;
+        var isDoc =
+          !t || t === document || t === document.documentElement || t === document.body;
+        if (isDoc) {
+          adoptRoot(document.scrollingElement || document.documentElement, true);
+        } else if (t.nodeType === 1) {
+          // Only the page's main scroller counts; a small widget scrolling
+          // inside the article is not the reading position.
+          if (
+            t.clientHeight >= window.innerHeight * 0.5 &&
+            t.scrollHeight > t.clientHeight + 100
+          ) {
+            adoptRoot(t, false);
+          } else {
+            return;
+          }
+        } else {
+          return;
+        }
+        if (pending) return;
+        pending = true;
+        requestAnimationFrame(function () {
+          pending = false;
+          send("scroll", metrics());
+        });
+      },
+      true,
+    );
 
     document.addEventListener("selectionchange", function () {
       var sel;
@@ -1117,8 +1158,16 @@
     send("ready", metrics());
 
     // Interactive snapshots may keep laying out after load; report fresh heights.
-    setTimeout(function () { send("doc-height", metrics()); }, 800);
-    setTimeout(function () { send("doc-height", metrics()); }, 2500);
+    [300, 800, 2500].forEach(function (delay) {
+      setTimeout(function () {
+        refreshScrollRoot();
+        send("doc-height", metrics());
+      }, delay);
+    });
+    window.addEventListener("load", function () {
+      refreshScrollRoot();
+      send("doc-height", metrics());
+    });
     // Late re-renders can wipe marks; re-apply anything missing.
     setTimeout(function () { if (knownHighlights.length) applyAll(knownHighlights); }, 2600);
   }
@@ -1155,19 +1204,33 @@
       y = (state.scrollRatio || 0) * Math.max(0, m.docHeight - m.viewport);
     }
     scrollTo(y, false);
-    // Late layout shifts (fonts, scripts) can move content under us; retry
-    // unless the reader has taken over scrolling.
-    [400, 1200].forEach(function (delay) {
-      setTimeout(function () {
-        if (userScrolled) return;
-        var mm = metrics();
-        var target = state.scrollY || 0;
-        if (state.docHeight && Math.abs(mm.docHeight - state.docHeight) > state.docHeight * 0.02) {
-          target = (state.scrollRatio || 0) * Math.max(0, mm.docHeight - mm.viewport);
-        }
-        if (Math.abs(mm.y - target) > 40) scrollTo(target, false);
-      }, delay);
-    });
+
+    // An app-rendered page is still short when "ready" fires: hydration,
+    // fonts and images all add height afterwards. Keep re-applying until
+    // the document can actually hold the position (or the reader scrolls).
+    var attempts = 0;
+    var timer = setInterval(function () {
+      attempts++;
+      if (userScrolled || attempts > 24) {
+        clearInterval(timer);
+        return;
+      }
+      refreshScrollRoot();
+      var mm = metrics();
+      var target = state.scrollY || 0;
+      if (state.docHeight && Math.abs(mm.docHeight - state.docHeight) > state.docHeight * 0.02) {
+        target = (state.scrollRatio || 0) * Math.max(0, mm.docHeight - mm.viewport);
+      }
+      var reachable = Math.max(0, mm.docHeight - mm.viewport);
+      if (reachable < 10) return; // nothing to scroll yet — wait for layout
+      target = Math.min(target, reachable);
+      if (Math.abs(mm.y - target) > 8) scrollTo(target, false);
+      // Settled: the position stuck and the document stopped growing.
+      if (Math.abs(mm.y - target) <= 8 && attempts > 3) {
+        clearInterval(timer);
+        send("scroll", metrics());
+      }
+    }, 250);
   }
 
   window.addEventListener("message", function (e) {

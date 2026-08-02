@@ -8,7 +8,9 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "icon": "node scripts/make-icon.mjs && tauri icon app-icon.png -o src-tauri/icons"
+    "icon": "node scripts/make-icon.mjs && tauri icon app-icon.png -o src-tauri/icons",
+    "build:ios": "node scripts/deploy-ios.mjs",
+    "ios": "tauri ios dev"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.5.0",
