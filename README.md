@@ -20,6 +20,9 @@ Built on [Tauri 2.0](https://v2.tauri.app).
      content to load.
   2. **Include pages** *(optional)* — turn on link picking and click any
      link to add that page to the same document; click again to drop it.
+     Included pages are *loaded* at capture time, not merely downloaded, so
+     the route chunks, media and data requests their own code triggers are
+     captured too.
      Off-site links are ignored so a capture can't run away. If a link is
      hard to hit (a menu, a script-driven control), browse to the page
      normally and press **Add this page** instead.
@@ -188,10 +191,10 @@ between machines is stable; otherwise a fresh id is minted.
   the document CSP (usually a font or analytics beacon, so it degrades
   gracefully).
 - Archives are capped at 512 MB, and at most 60 included pages per document.
-- Included pages are fetched, not browsed: their HTML and the resources it
-  references are stored, but scripts on those pages are never executed during
-  capture, so anything they would have loaded at runtime is only present if
-  the main page already pulled it in (shared bundles usually have).
+- Included pages are loaded in a hidden frame and scrolled, but only assets
+  the page requests on its own are captured. Something that loads solely in
+  response to an interaction nobody performed (a sound tied to one button,
+  a panel opened from a menu) can still be missing.
 
 ## Roadmap ideas
 

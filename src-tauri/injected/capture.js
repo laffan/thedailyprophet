@@ -1273,72 +1273,155 @@
   }
 
   /**
-   * Fetch each page the user marked with the include tool and add it to the
-   * archive under its own URL, along with the resources it references. In
-   * the reader, following the link is then ordinary navigation.
+   * Add each page the user marked with the include tool.
+   *
+   * The page is *loaded*, not just fetched: a hidden same-origin iframe runs
+   * its scripts so route chunks, audio, lazily-imported modules and data
+   * requests actually happen and can be observed through that frame's
+   * resource timeline. A static HTML scan cannot see any of those — they
+   * exist only once the page's own code runs.
    */
+  function harvestPage(pageUrl) {
+    return new Promise(function (resolve) {
+      var frame = document.createElement("iframe");
+      frame.setAttribute(UI_ATTR, "1");
+      frame.setAttribute("src", pageUrl);
+      frame.style.cssText =
+        "position:fixed;left:-20000px;top:0;width:1280px;height:900px;" +
+        "opacity:0;pointer-events:none;border:0;visibility:hidden";
+      var settled = false;
+
+      function collect() {
+        if (settled) return;
+        settled = true;
+        var found = [];
+        try {
+          var w = frame.contentWindow;
+          var d = w.document;
+          var entries = w.performance.getEntriesByType("resource");
+          for (var i = 0; i < entries.length; i++) {
+            if (entries[i].initiatorType === "navigation") continue;
+            found.push(entries[i].name);
+          }
+          var q = d.querySelectorAll(
+            "script[src], link[href], img[src], source[src], video[src], audio[src], video[poster]",
+          );
+          for (var j = 0; j < q.length; j++) {
+            var el = q[j];
+            var raw = el.getAttribute("src") || el.getAttribute("href");
+            if (raw) found.push(absUrl(raw, pageUrl));
+            if (el.currentSrc) found.push(el.currentSrc);
+          }
+        } catch (e) {
+          // Cross-origin or blocked framing — fall back to the static scan.
+        }
+        try { frame.remove(); } catch (e) {}
+        resolve(found.filter(Boolean));
+      }
+
+      // Nudge the page so viewport-triggered work (lazy images, scroll-linked
+      // loaders, audio preloads) actually fires before we look.
+      function exercise() {
+        var step = 0;
+        var timer = setInterval(function () {
+          try {
+            var w = frame.contentWindow;
+            step++;
+            w.scrollTo(0, w.document.body.scrollHeight * (step / 6));
+            w.dispatchEvent(new w.Event("resize"));
+          } catch (e) {}
+          if (step >= 6) {
+            clearInterval(timer);
+            setTimeout(collect, 1800);
+          }
+        }, 450);
+      }
+
+      frame.addEventListener("load", function () { setTimeout(exercise, 600); });
+      setTimeout(collect, 25000); // hard cap so one bad page can't stall a capture
+      document.body.appendChild(frame);
+    });
+  }
+
+  /** Static fallback when a page refuses to be framed. */
+  function staticScan(html, pageUrl) {
+    var out = [];
+    try {
+      var doc = new DOMParser().parseFromString(html, "text/html");
+      var nodes = doc.querySelectorAll(
+        "script[src], link[rel~=stylesheet], link[rel~=icon], link[as], img[src]",
+      );
+      for (var n = 0; n < nodes.length; n++) {
+        var raw = nodes[n].getAttribute("src") || nodes[n].getAttribute("href");
+        var abs = absUrl(raw, pageUrl);
+        if (abs) out.push(abs);
+      }
+    } catch (e) {}
+    return out;
+  }
+
   function fetchIncludedPages() {
-    var urls = includedOrder.slice(0, 60);
-    if (!urls.length) return Promise.resolve(0);
-    progress("Adding linked pages", urls.length + " selected");
+    var pages = includedOrder.slice(0, 60);
+    if (!pages.length) return Promise.resolve(0);
+    progress("Adding linked pages", pages.length + " selected");
     var stored = 0;
-    return runJobs(
-      urls.map(function (pageUrl, i) {
-        return function () {
-          return (origFetch || window.fetch)(pageUrl, { credentials: "include" })
-            .then(function (r) {
-              if (!r || !r.ok) return null;
-              var ct = (r.headers.get("content-type") || "").split(";")[0].trim();
-              if (ct && ct.indexOf("html") === -1) return null;
-              return r.text();
-            })
-            .then(function (html) {
-              if (!html) {
-                progress("Linked page unavailable", pageUrl);
-                return;
-              }
-              var bytes = new TextEncoder().encode(html);
-              var b64 = bytesToB64(bytes.buffer);
-              return invoke("capture_archive_resource", {
-                url: pageUrl,
-                mime: "text/html",
-                b64: b64,
-              })
-                .then(function () {
-                  stored++;
-                  progress("Added page " + (i + 1) + " of " + urls.length, INCLUDED[pageUrl] || pageUrl);
-                  // Pull in what that page references (its own scripts,
-                  // styles and images; shared bundles are already stored).
-                  var sub = [];
-                  try {
-                    var doc = new DOMParser().parseFromString(html, "text/html");
-                    var nodes = doc.querySelectorAll(
-                      "script[src], link[rel~=stylesheet], img[src], link[rel~=icon]",
-                    );
-                    for (var n = 0; n < nodes.length; n++) {
-                      var raw = nodes[n].getAttribute("src") || nodes[n].getAttribute("href");
-                      var abs = absUrl(raw, pageUrl);
-                      if (abs && /^https?:/i.test(abs) && !resourceCache.has(abs)) sub.push(abs);
-                    }
-                  } catch (e) {}
-                  if (!sub.length) return;
-                  return runJobs(
-                    sub.slice(0, 120).map(function (u) {
-                      return function () { return storeResource(u); };
-                    }),
-                    5,
-                  );
-                })
-                .catch(function () {});
-            })
-            .catch(function () {
+
+    // Sequential: each page is loaded for real, and running several at once
+    // would distort what the page does on its own.
+    var chain = Promise.resolve();
+    pages.forEach(function (pageUrl, i) {
+      chain = chain.then(function () {
+        progress("Loading page " + (i + 1) + " of " + pages.length, INCLUDED[pageUrl] || pageUrl);
+        return (origFetch || window.fetch)(pageUrl, { credentials: "include" })
+          .then(function (r) {
+            if (!r || !r.ok) return null;
+            var ct = (r.headers.get("content-type") || "").split(";")[0].trim();
+            if (ct && ct.indexOf("html") === -1) return null;
+            return r.text();
+          })
+          .catch(function () { return null; })
+          .then(function (html) {
+            if (!html) {
               progress("Linked page unavailable", pageUrl);
-            });
-        };
-      }),
-      3,
-    ).then(function () {
-      if (stored) progress("Linked pages added", stored + " of " + urls.length);
+              return;
+            }
+            var bytes = new TextEncoder().encode(html);
+            return invoke("capture_archive_resource", {
+              url: pageUrl,
+              mime: "text/html",
+              b64: bytesToB64(bytes.buffer),
+            })
+              .then(function () {
+                stored++;
+                return harvestPage(pageUrl);
+              })
+              .then(function (found) {
+                var list = (found && found.length ? found : staticScan(html, pageUrl)).filter(
+                  function (u, idx, arr) {
+                    return (
+                      /^https?:/i.test(u) &&
+                      arr.indexOf(u) === idx &&
+                      !resourceCache.has(u) &&
+                      u.split("#")[0] !== pageUrl.split("#")[0]
+                    );
+                  },
+                );
+                if (!list.length) return;
+                progress("Saving page " + (i + 1) + " assets", list.length + " resources");
+                return runJobs(
+                  list.slice(0, 400).map(function (u) {
+                    return function () { return storeResource(u); };
+                  }),
+                  6,
+                );
+              })
+              .catch(function () {});
+          });
+      });
+    });
+
+    return chain.then(function () {
+      if (stored) progress("Linked pages added", stored + " of " + pages.length);
       return stored;
     });
   }

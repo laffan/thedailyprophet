@@ -138,14 +138,25 @@ pub struct ResourceIndex {
 impl ResourceIndex {
     pub fn build(dir: &Path, main_url: &str) -> Self {
         let origin = origin_of(main_url);
-        let mut by_key = HashMap::new();
+        let mut by_key: HashMap<String, (String, String)> = HashMap::new();
+        // Tracks which query-less aliases came from a URL that had no query.
+        // A bare URL always wins the alias: otherwise a framework's data
+        // request (`/chapter?_rsc=…`) could shadow the page at `/chapter`.
+        let mut alias_is_exact: HashMap<String, bool> = HashMap::new();
         for e in read_manifest(dir) {
             let key = key_for_url(&e.u, &origin);
-            // Also index the query-less path so cache-busted requests still hit.
+            let had_query = key.contains('?');
             if let Some(base) = key.split('?').next() {
-                by_key
-                    .entry(base.to_string())
-                    .or_insert_with(|| (e.f.clone(), e.m.clone()));
+                let base = base.to_string();
+                let replace = match alias_is_exact.get(&base) {
+                    None => true,
+                    // Only a query-less URL may displace an existing alias.
+                    Some(existing_exact) => !*existing_exact && !had_query,
+                };
+                if replace {
+                    by_key.insert(base.clone(), (e.f.clone(), e.m.clone()));
+                    alias_is_exact.insert(base, !had_query);
+                }
             }
             by_key.insert(key, (e.f, e.m));
         }
