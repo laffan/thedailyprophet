@@ -79,26 +79,35 @@ pub async fn capture_set_bounds(
     width: f64,
     height: f64,
 ) -> Result<Option<BoundsInfo>, String> {
-    let wv = app
-        .get_webview("capture")
-        .ok_or("the capture view is not open")?;
-    let rect = tauri::Rect {
-        position: tauri::LogicalPosition::new(x, y).into(),
-        size: tauri::LogicalSize::new(width.max(1.0), height.max(1.0)).into(),
-    };
-    wv.set_bounds(rect).map_err(|e| e.to_string())?;
+    // Positioning a child webview is a desktop-only API in Tauri.
+    #[cfg(desktop)]
+    {
+        let wv = app
+            .get_webview("capture")
+            .ok_or("the capture view is not open")?;
+        let rect = tauri::Rect {
+            position: tauri::LogicalPosition::new(x, y).into(),
+            size: tauri::LogicalSize::new(width.max(1.0), height.max(1.0)).into(),
+        };
+        wv.set_bounds(rect).map_err(|e| e.to_string())?;
 
-    let scale = wv.window().scale_factor().unwrap_or(1.0);
-    Ok(wv.bounds().ok().map(|b| {
-        let pos = b.position.to_logical::<f64>(scale);
-        let size = b.size.to_logical::<f64>(scale);
-        BoundsInfo {
-            x: pos.x,
-            y: pos.y,
-            width: size.width,
-            height: size.height,
-        }
-    }))
+        let scale = wv.window().scale_factor().unwrap_or(1.0);
+        Ok(wv.bounds().ok().map(|b| {
+            let pos = b.position.to_logical::<f64>(scale);
+            let size = b.size.to_logical::<f64>(scale);
+            BoundsInfo {
+                x: pos.x,
+                y: pos.y,
+                width: size.width,
+                height: size.height,
+            }
+        }))
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = (app, x, y, width, height);
+        Ok(None)
+    }
 }
 
 /// Drives the injected toolkit from the main window.
@@ -108,6 +117,13 @@ pub async fn capture_control(
     action: String,
     options: Option<Value>,
 ) -> Result<(), String> {
+    #[cfg(not(desktop))]
+    {
+        let _ = (app, action, options);
+        return Err("Capturing needs the desktop app for now.".into());
+    }
+    #[cfg(desktop)]
+    {
     let wv = app
         .get_webview("capture")
         .ok_or("the capture view is not open")?;
@@ -143,6 +159,7 @@ pub async fn capture_control(
         other => return Err(format!("unknown capture action: {other}")),
     };
     wv.eval(js).map_err(|e| e.to_string())
+    }
 }
 
 // ---- commands invoked BY the capture page (remote IPC) --------------------
@@ -396,6 +413,7 @@ pub async fn capture_archive_finish(
     crate::protocol::invalidate(&summary.meta.id);
     crate::sync::auto_sync(&app);
     let _ = app.emit("capture://done", &summary);
+    #[cfg(desktop)]
     if let Some(wv) = app.get_webview("capture") {
         let _ = wv.close();
     }
@@ -494,6 +512,7 @@ pub async fn capture_deliver(app: AppHandle, doc: NewDocument) -> Result<DocSumm
     let summary = library::create_document(&app, doc)?;
     let _ = app.emit("capture://done", &summary);
     let _ = app.emit("library://changed", ());
+    #[cfg(desktop)]
     if let Some(wv) = app.get_webview("capture") {
         let _ = wv.close();
     }
