@@ -48,6 +48,60 @@ fn not_found(msg: &str) -> tauri::http::Response<Vec<u8>> {
         .unwrap()
 }
 
+/// A link the reader followed that was never captured. Navigations deserve a
+/// readable page rather than a bare 404 body.
+fn uncaptured_page(path: &str, source: &str) -> tauri::http::Response<Vec<u8>> {
+    let shown = html_escape(path);
+    let origin = html_escape(&crate::archive::origin_of(source));
+    let body = format!(
+        r#"<!DOCTYPE html><html><head><meta charset="utf-8"><title>Page not in this document</title>
+<style>
+:root{{color-scheme:light dark}}
+body{{font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,sans-serif;
+margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+background:#f3ecdd;color:#262016;padding:40px}}
+@media (prefers-color-scheme:dark){{body{{background:#191510;color:#ece4d3}}}}
+.card{{max-width:30rem;text-align:center}}
+h1{{font-size:20px;margin:0 0 12px;font-family:Georgia,serif}}
+p{{margin:0 0 10px;opacity:.8;font-size:14px}}
+code{{font-size:12.5px;opacity:.75;word-break:break-all}}
+button{{font:inherit;font-size:14px;margin-top:18px;padding:8px 18px;border:0;border-radius:6px;
+background:#7a2e1d;color:#f7f1e4;cursor:pointer}}
+</style></head><body><div class="card">
+<h1>This page wasn't included</h1>
+<p>The link points to a page that wasn't part of the capture, and this
+document is offline.</p>
+<code>{origin}{shown}</code>
+<p style="margin-top:16px">To include pages like this one, use <b>Include pages</b>
+during the Browse step when capturing.</p>
+<button onclick="history.back()">Go back</button>
+</div></body></html>"#
+    );
+    tauri::http::Response::builder()
+        .status(404)
+        .header("Content-Type", "text/html; charset=utf-8")
+        .header("Content-Security-Policy", DOC_CSP)
+        .body(body.into_bytes())
+        .unwrap()
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// Navigations (as opposed to subresource loads) ask for HTML first.
+fn is_navigation(request: &tauri::http::Request<Vec<u8>>) -> bool {
+    request
+        .headers()
+        .get("Accept")
+        .and_then(|v| v.to_str().ok())
+        .map(|a| a.contains("text/html"))
+        .unwrap_or(false)
+}
+
 /// Inject the reader runtime as the first thing in `<head>` so it installs
 /// its hooks before any page script runs.
 fn inject_runtime(html: &[u8]) -> Vec<u8> {
@@ -146,6 +200,19 @@ pub fn handle(
 
     match index.get(&key) {
         Some((bytes, mime)) => {
+            // Pages added with the include tool are documents in their own
+            // right: they get the reader runtime and the offline CSP too, so
+            // scroll position, highlights and bookmarks work across a
+            // multi-page document.
+            if mime.contains("html") {
+                return tauri::http::Response::builder()
+                    .status(200)
+                    .header("Content-Type", "text/html; charset=utf-8")
+                    .header("Content-Security-Policy", DOC_CSP)
+                    .header("Cache-Control", "no-store")
+                    .body(inject_runtime(&bytes))
+                    .unwrap();
+            }
             let ct = if mime.is_empty() {
                 "application/octet-stream".to_string()
             } else if crate::archive::is_texty(&mime) && !mime.contains("charset") {
@@ -161,6 +228,7 @@ pub fn handle(
                 .body(bytes)
                 .unwrap()
         }
+        None if is_navigation(&request) => uncaptured_page(&key, &meta.source_url),
         None => not_found("not captured"),
     }
 }

@@ -864,3 +864,45 @@ button {
   background: #7c2417;
   color: #fdf0e8;
 }
+
+/* ---- included pages (capture, Browse step) ---- */
+
+.btn-accent {
+  background: #1d7a4c;
+  color: #f2f8f4;
+  box-shadow: var(--shadow-soft);
+}
+.btn-accent:hover {
+  opacity: 0.92;
+}
+.included-list {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 62px;
+  overflow-y: auto;
+}
+.included-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 7px;
+  border-radius: 999px;
+  background: rgba(29, 122, 76, 0.12);
+  border: 1px solid rgba(29, 122, 76, 0.4);
+  font-size: 11.5px;
+  max-width: 260px;
+}
+.included-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #1d7a4c;
+  flex: none;
+}
+.included-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

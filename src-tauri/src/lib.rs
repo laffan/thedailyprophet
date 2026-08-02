@@ -48,6 +48,7 @@ pub fn run() {
             capture::capture_page_info,
             capture::capture_progress,
             capture::capture_count,
+            capture::capture_included,
             capture::capture_fetch,
             capture::capture_deliver,
             capture::capture_failed,

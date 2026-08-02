@@ -23,6 +23,8 @@ export function mountCapture(root: HTMLElement, ctx: AppContext, url: string): (
   let finished = false;
   let started = false;
   let removedCount = 0;
+  let includeMode = false;
+  let included: Array<{ url: string; label: string }> = [];
   let pageTitle = "";
   let pageUrl = url;
   const unlisteners: UnlistenFn[] = [];
@@ -106,14 +108,47 @@ export function mountCapture(root: HTMLElement, ctx: AppContext, url: string): (
         el(
           "p.capture-hint",
           null,
-          "Use the page below like a normal browser: log in, dismiss banners, expand sections, scroll to the end so lazy images load. When it looks right, continue.",
+          includeMode
+            ? "Click any link below to add its page to this document — click again to remove it. Turn picking off to browse normally."
+            : "Use the page below like a normal browser: log in, dismiss banners, expand sections, scroll to the end so lazy images load.",
         ),
         el(
           "div.capture-actions",
           null,
+          el(
+            `button.btn.${includeMode ? "btn-accent" : "btn-ghost"}.btn-small`,
+            {
+              onclick: () => {
+                includeMode = !includeMode;
+                render();
+                void captureControl(includeMode ? "begin_include" : "end_cleanup").catch((e) =>
+                  toast(String(e), "error"),
+                );
+              },
+            },
+            includeMode ? "✓ Picking links" : "Include pages…",
+          ),
+          el(
+            "button.btn.btn-ghost.btn-small",
+            {
+              title: "Add the page currently shown below",
+              onclick: () =>
+                void captureControl("include_current").catch((e) => toast(String(e), "error")),
+            },
+            "Add this page",
+          ),
+          included.length
+            ? el(
+                "button.btn.btn-ghost.btn-small",
+                { onclick: () => void captureControl("clear_included").catch(() => {}) },
+                `Clear (${included.length})`,
+              )
+            : null,
           el("button.btn.btn-primary", { onclick: () => beginCleanup() }, "Continue to clean-up →"),
         ),
       );
+      const list = includedList();
+      if (list) controls.append(list);
     } else if (step === "cleanup") {
       controls.append(
         el(
@@ -176,6 +211,23 @@ export function mountCapture(root: HTMLElement, ctx: AppContext, url: string): (
         progressLog,
       );
     }
+  }
+
+  /** The pages queued to travel with this document. */
+  function includedList(): HTMLElement | null {
+    if (!included.length) return null;
+    return el(
+      "ul.included-list",
+      null,
+      ...included.map((p) =>
+        el(
+          "li.included-item",
+          { title: p.url },
+          el("span.included-dot"),
+          el("span.included-label", null, p.label || p.url),
+        ),
+      ),
+    );
   }
 
   function countText(): string {
@@ -289,6 +341,13 @@ export function mountCapture(root: HTMLElement, ctx: AppContext, url: string): (
           updateCount();
           void captureControl("begin_cleanup").catch(() => {});
         }
+        if (step === "browse" && navigated && includeMode) {
+          void captureControl("begin_include").catch(() => {});
+        }
+      }),
+      await listen<Array<{ url: string; label: string }>>("capture://included", (e) => {
+        included = e.payload || [];
+        if (step === "browse") render();
       }),
       await listen<number>("capture://count", (e) => {
         removedCount = e.payload;

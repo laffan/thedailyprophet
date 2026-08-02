@@ -23,6 +23,7 @@ fn main() {
             "capture_page_info",
             "capture_progress",
             "capture_count",
+            "capture_included",
             "capture_fetch",
             "capture_deliver",
             "capture_failed",

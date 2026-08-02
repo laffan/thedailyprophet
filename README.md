@@ -18,11 +18,16 @@ Built on [Tauri 2.0](https://v2.tauri.app).
   1. **Browse** — use the page like a normal browser. Log in, dismiss
      cookie banners, expand collapsed sections, scroll to force lazy
      content to load.
-  2. **Clean up** — hover-and-click removal of extraneous elements
+  2. **Include pages** *(optional)* — turn on link picking and click any
+     link to add that page to the same document; click again to drop it.
+     Off-site links are ignored so a capture can't run away. If a link is
+     hard to hit (a menu, a script-driven control), browse to the page
+     normally and press **Add this page** instead.
+  3. **Clean up** — hover-and-click removal of extraneous elements
      (sidebars, banners, newsletter boxes). Arrow keys grow/shrink the
      selection between child and parent, `Z` undoes, everything can be
      restored.
-  3. **Save** — the page source is re-fetched with your session and every
+  4. **Save** — the page source is re-fetched with your session and every
      resource it loaded (scripts, stylesheets, fonts, images, API responses)
      is stored under its original URL. Clean-up removals are recorded as
      selectors so the original HTML stays intact for hydration.
@@ -34,6 +39,12 @@ Built on [Tauri 2.0](https://v2.tauri.app).
   lifecycle events. Bundled apps (Next.js/Turbopack, webpack, Vite) hydrate
   and stay interactive offline because nothing about how they load has been
   rewritten.
+- **Multi-page documents** — pages added with the include tool are stored
+  under their own URLs, so following the link in the reader is ordinary
+  navigation inside the archive. Scroll position is remembered per page, and
+  bookmarks and highlights record which page they belong to, so jumping to
+  one navigates there first. A link that was never included shows a short
+  explanatory page rather than failing.
 - **Safari `.webarchive` import** — `.webarchive` files open directly; the
   format maps onto ours one-to-one.
 - **Library shelf** — covers (from `og:image` or the page's best image, with
@@ -176,7 +187,11 @@ between machines is stable; otherwise a fresh id is minted.
   they were requested while you browsed; anything else is blocked offline by
   the document CSP (usually a font or analytics beacon, so it degrades
   gracefully).
-- Archives are capped at 512 MB.
+- Archives are capped at 512 MB, and at most 60 included pages per document.
+- Included pages are fetched, not browsed: their HTML and the resources it
+  references are stored, but scripts on those pages are never executed during
+  capture, so anything they would have loaded at runtime is only present if
+  the main page already pulled it in (shared bundles usually have).
 
 ## Roadmap ideas
 

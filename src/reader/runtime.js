@@ -14,8 +14,16 @@
      the archive. None of the replay machinery below applies — the page runs
      exactly as it did online. Legacy single-file snapshots (about:srcdoc)
      still take the replay path. */
+  // Detect it by origin rather than by scheme name: Tauri serves custom
+  // schemes as prophet://<id> on Apple platforms but http://prophet.localhost
+  // on Windows/Android, and legacy snapshots are about:srcdoc (opaque origin).
   var NATIVE = false;
-  try { NATIVE = location.protocol === "prophet:"; } catch (e) {}
+  try {
+    NATIVE =
+      location.protocol !== "about:" &&
+      !!location.origin &&
+      location.origin !== "null";
+  } catch (e) {}
 
   /* ---- shims: opaque origins throw on storage / history access -------- */
   function memoryStorage() {
@@ -635,10 +643,22 @@
   })();
 
   /* ---- messaging ------------------------------------------------------ */
+  /** Which page of a multi-page document this is. */
+  function pagePath() {
+    try { return location.pathname + location.search; } catch (e) { return "/"; }
+  }
+
   function send(type, payload) {
-    var msg = Object.assign({ __prophet: true, type: type }, payload || {});
+    var msg = Object.assign({ __prophet: true, type: type, page: pagePath() }, payload || {});
     try { window.parent.postMessage(msg, "*"); } catch (e) {}
   }
+
+  /** Flush position before the browser tears this page down. */
+  function persistBeforeLeave() {
+    try { send("scroll", metrics()); } catch (e) {}
+  }
+  window.addEventListener("pagehide", persistBeforeLeave);
+  window.addEventListener("beforeunload", persistBeforeLeave);
 
   var COLORS = {
     sun: "rgba(245, 214, 99, 0.55)",
@@ -1063,6 +1083,21 @@
         if (target) {
           try { target.scrollIntoView({ behavior: "smooth", block: "start" }); } catch (err) { target.scrollIntoView(); }
         }
+        return;
+      }
+      if (NATIVE) {
+        // Inside an archive, same-origin links are other pages of this same
+        // document (added with the include tool). Let the browser navigate;
+        // the protocol handler serves them, or explains that they weren't
+        // captured. Anything off-origin goes to the real browser.
+        var resolved = "";
+        try { resolved = link.href; } catch (err) {}
+        if (resolved && resolved.indexOf(location.origin) === 0) {
+          persistBeforeLeave();
+          return; // native navigation
+        }
+        e.preventDefault();
+        if (/^https?:/i.test(resolved)) send("external-link", { href: resolved });
         return;
       }
       if (/^https?:/i.test(href)) {

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-capture-included"
+description = "Enables the capture_included command without any pre-configured scope."
+commands.allow = ["capture_included"]
+
+[[permission]]
+identifier = "deny-capture-included"
+description = "Denies the capture_included command without any pre-configured scope."
+commands.deny = ["capture_included"]

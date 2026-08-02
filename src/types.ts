@@ -14,6 +14,12 @@ export interface DocMeta {
 }
 
 /** Reading state (state.json). Owned entirely by the frontend; Rust treats it as opaque JSON. */
+export interface PagePosition {
+  scrollY: number;
+  scrollRatio: number;
+  docHeight: number;
+}
+
 export interface DocState {
   scrollY: number;
   scrollRatio: number;
@@ -22,6 +28,10 @@ export interface DocState {
   lastOpenedAt: number;
   bookmarks: Bookmark[];
   highlights: Highlight[];
+  /** Per-page positions for multi-page documents, keyed by path. */
+  pages?: Record<string, PagePosition>;
+  /** Path of the page last being read. */
+  lastPage?: string;
 }
 
 export interface Bookmark {
@@ -31,6 +41,8 @@ export interface Bookmark {
   ratio: number;
   docHeight: number;
   createdAt: number;
+  /** Page path for multi-page documents. */
+  page?: string;
 }
 
 export type HighlightColor = "sun" | "rose" | "mint" | "sky";
@@ -47,6 +59,8 @@ export interface Highlight {
   suffix: string;
   createdAt: number;
   orphaned?: boolean; // set when the quote could not be re-anchored
+  /** Page path for multi-page documents. */
+  page?: string;
 }
 
 export interface DocSummary {

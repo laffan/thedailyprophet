@@ -58,6 +58,9 @@ export function captureSetBounds(rect: CaptureRect): Promise<CaptureRect | null>
 export type CaptureAction =
   | "begin_cleanup"
   | "end_cleanup"
+  | "begin_include"
+  | "include_current"
+  | "clear_included"
   | "undo"
   | "restore_all"
   | "cancel";

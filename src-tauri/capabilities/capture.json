@@ -11,6 +11,7 @@
     "allow-capture-page-info",
     "allow-capture-progress",
     "allow-capture-count",
+    "allow-capture-included",
     "allow-capture-fetch",
     "allow-capture-deliver",
     "allow-capture-failed",

@@ -232,13 +232,72 @@
     window.XMLHttpRequest = WrappedXHR;
   }
 
+  /* ================= include mode =================
+     Lets the reader pick links whose pages become part of the same
+     document, so a multi-part article travels as one thing. Included pages
+     are stored under their own URLs, so following the link in the reader is
+     ordinary navigation inside the archive. */
+
+  var INCLUDED = Object.create(null); // absolute url -> label
+  var includedOrder = [];
+
+  function includableUrl(a) {
+    var raw = a.getAttribute("href");
+    if (!raw || raw.charAt(0) === "#" || /^(javascript|mailto|tel):/i.test(raw)) return null;
+    var abs = absUrl(raw);
+    if (!abs || !/^https?:/i.test(abs)) return null;
+    abs = abs.split("#")[0];
+    if (abs === location.href.split("#")[0]) return null;
+    // Same site only: following a link off-site would pull in the whole web.
+    try {
+      if (new URL(abs).origin !== location.origin) return null;
+    } catch (e) {
+      return null;
+    }
+    return abs;
+  }
+
+  function reportIncluded() {
+    invoke("capture_included", {
+      urls: includedOrder.map(function (u) {
+        return { url: u, label: INCLUDED[u] || u };
+      }),
+    }).catch(function () {});
+  }
+
+  function paintIncluded() {
+    var links = document.querySelectorAll("a[href]");
+    for (var i = 0; i < links.length; i++) {
+      var u = includableUrl(links[i]);
+      if (u && INCLUDED[u]) links[i].setAttribute(INCLUDED_ATTR, "1");
+      else links[i].removeAttribute(INCLUDED_ATTR);
+    }
+  }
+
+  function toggleInclude(a) {
+    var u = includableUrl(a);
+    if (!u) return false;
+    if (INCLUDED[u]) {
+      delete INCLUDED[u];
+      includedOrder = includedOrder.filter(function (x) { return x !== u; });
+    } else {
+      INCLUDED[u] = (a.textContent || "").replace(/\s+/g, " ").trim().slice(0, 90) || u;
+      includedOrder.push(u);
+    }
+    paintIncluded();
+    reportIncluded();
+    return true;
+  }
+
   /* ================= clean-up mode ================= */
 
   var UI_ATTR = "data-prophet-ui";
   var REMOVED_ATTR = "data-prophet-removed";
+  var INCLUDED_ATTR = "data-prophet-included";
 
   var cleanup = {
     active: false,
+    mode: "cleanup", // "cleanup" removes elements; "include" picks links
     removed: [],
     baseEl: null,
     level: 0,
@@ -272,6 +331,26 @@
     var el = currentTarget();
     if (!el || !cleanup.box) return;
     var r = el.getBoundingClientRect();
+    if (cleanup.mode === "include") {
+      var u = includableUrl(el);
+      cleanup.box.className = INCLUDED[u] ? "box box-included" : "box box-include";
+      cleanup.label.className = INCLUDED[u] ? "label label-included" : "label label-include";
+      cleanup.label.textContent = (INCLUDED[u] ? "Included — click to remove: " : "Add page: ") +
+        (u || "").replace(/^https?:\/\/[^/]+/, "");
+      cleanup.box.style.display = "block";
+      cleanup.label.style.display = "block";
+      cleanup.box.style.left = r.left - 2 + "px";
+      cleanup.box.style.top = r.top - 2 + "px";
+      cleanup.box.style.width = r.width + 4 + "px";
+      cleanup.box.style.height = r.height + 4 + "px";
+      var ily = r.top - 26;
+      if (ily < 4) ily = r.bottom + 4;
+      cleanup.label.style.left = Math.max(4, r.left) + "px";
+      cleanup.label.style.top = ily + "px";
+      return;
+    }
+    cleanup.box.className = "box";
+    cleanup.label.className = "label";
     cleanup.box.style.display = "block";
     cleanup.box.style.left = r.left - 2 + "px";
     cleanup.box.style.top = r.top - 2 + "px";
@@ -308,6 +387,19 @@
       hideBox();
       return;
     }
+    if (cleanup.mode === "include") {
+      // Only links are targets here, and always the whole link.
+      var link = el.closest ? el.closest("a[href]") : null;
+      if (!link || !includableUrl(link)) {
+        hideBox();
+        cleanup.baseEl = null;
+        return;
+      }
+      cleanup.baseEl = link;
+      cleanup.level = 0;
+      positionBox();
+      return;
+    }
     if (el !== cleanup.baseEl) {
       cleanup.baseEl = el;
       cleanup.level = 0;
@@ -318,6 +410,17 @@
   function onClick(e) {
     if (!cleanup.active) return;
     if (cleanup.host && (e.target === cleanup.host || cleanup.host.contains(e.target))) return;
+
+    if (cleanup.mode === "include") {
+      var link = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+      if (!link) return; // let ordinary page interaction through while picking
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      toggleInclude(link);
+      positionBox();
+      return;
+    }
+
     e.preventDefault();
     e.stopImmediatePropagation();
     var el = currentTarget();
@@ -333,6 +436,7 @@
 
   function onKey(e) {
     if (!cleanup.active) return;
+    if (cleanup.mode === "include") return; // no parent/child walking for links
     if (e.key === "ArrowUp") {
       e.preventDefault();
       e.stopImmediatePropagation();
@@ -360,7 +464,10 @@
     shadow.innerHTML =
       "<style>" +
       ".box{position:fixed;display:none;pointer-events:none;border:2px solid #c0392b;background:rgba(192,57,43,0.12);border-radius:3px;z-index:2}" +
+      ".box-include{border-color:#1d7a4c;background:rgba(29,122,76,0.12)}" +
+      ".box-included{border-color:#1d7a4c;background:rgba(29,122,76,0.28);border-style:double;border-width:4px}" +
       ".label{position:fixed;display:none;pointer-events:none;background:#c0392b;color:#fff;font:11px/1.6 -apple-system,Helvetica,sans-serif;padding:1px 7px;border-radius:3px;z-index:3;max-width:60vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}" +
+      ".label-include,.label-included{background:#1d7a4c}" +
       ".bar{position:fixed;top:12px;right:12px;z-index:4;display:flex;gap:8px;align-items:center;background:#231d13;color:#f2e8d5;font:12.5px -apple-system,Helvetica,sans-serif;padding:9px 12px;border-radius:9px;box-shadow:0 6px 18px rgba(0,0,0,.35)}" +
       ".bar button{all:initial;font:600 12px -apple-system,Helvetica,sans-serif;color:#f2e8d5;background:#4a3f2c;padding:5px 11px;border-radius:6px;cursor:pointer}" +
       ".bar button:hover{background:#5d4f37}" +
@@ -1165,6 +1272,77 @@
     });
   }
 
+  /**
+   * Fetch each page the user marked with the include tool and add it to the
+   * archive under its own URL, along with the resources it references. In
+   * the reader, following the link is then ordinary navigation.
+   */
+  function fetchIncludedPages() {
+    var urls = includedOrder.slice(0, 60);
+    if (!urls.length) return Promise.resolve(0);
+    progress("Adding linked pages", urls.length + " selected");
+    var stored = 0;
+    return runJobs(
+      urls.map(function (pageUrl, i) {
+        return function () {
+          return (origFetch || window.fetch)(pageUrl, { credentials: "include" })
+            .then(function (r) {
+              if (!r || !r.ok) return null;
+              var ct = (r.headers.get("content-type") || "").split(";")[0].trim();
+              if (ct && ct.indexOf("html") === -1) return null;
+              return r.text();
+            })
+            .then(function (html) {
+              if (!html) {
+                progress("Linked page unavailable", pageUrl);
+                return;
+              }
+              var bytes = new TextEncoder().encode(html);
+              var b64 = bytesToB64(bytes.buffer);
+              return invoke("capture_archive_resource", {
+                url: pageUrl,
+                mime: "text/html",
+                b64: b64,
+              })
+                .then(function () {
+                  stored++;
+                  progress("Added page " + (i + 1) + " of " + urls.length, INCLUDED[pageUrl] || pageUrl);
+                  // Pull in what that page references (its own scripts,
+                  // styles and images; shared bundles are already stored).
+                  var sub = [];
+                  try {
+                    var doc = new DOMParser().parseFromString(html, "text/html");
+                    var nodes = doc.querySelectorAll(
+                      "script[src], link[rel~=stylesheet], img[src], link[rel~=icon]",
+                    );
+                    for (var n = 0; n < nodes.length; n++) {
+                      var raw = nodes[n].getAttribute("src") || nodes[n].getAttribute("href");
+                      var abs = absUrl(raw, pageUrl);
+                      if (abs && /^https?:/i.test(abs) && !resourceCache.has(abs)) sub.push(abs);
+                    }
+                  } catch (e) {}
+                  if (!sub.length) return;
+                  return runJobs(
+                    sub.slice(0, 120).map(function (u) {
+                      return function () { return storeResource(u); };
+                    }),
+                    5,
+                  );
+                })
+                .catch(function () {});
+            })
+            .catch(function () {
+              progress("Linked page unavailable", pageUrl);
+            });
+        };
+      }),
+      3,
+    ).then(function () {
+      if (stored) progress("Linked pages added", stored + " of " + urls.length);
+      return stored;
+    });
+  }
+
   function archiveSnapshot(opts) {
     var removedSelectors = [];
     for (var i = 0; i < cleanup.removed.length; i++) {
@@ -1219,6 +1397,9 @@
             6,
           ).then(function () { return serverHtml; });
         });
+      })
+      .then(function (serverHtml) {
+        return fetchIncludedPages().then(function () { return serverHtml; });
       })
       .then(function (serverHtml) {
         progress("Choosing a cover");
@@ -1384,22 +1565,56 @@
 
   /* ================= public api ================= */
 
+  function ensureStyle() {
+    if (cleanup.styleEl) return;
+    cleanup.styleEl = document.createElement("style");
+    cleanup.styleEl.setAttribute(UI_ATTR, "1");
+    cleanup.styleEl.textContent =
+      "[" + REMOVED_ATTR + "]{display:none !important;}" +
+      "[" + INCLUDED_ATTR + "]{outline:2px solid #1d7a4c !important;outline-offset:1px;" +
+      "background-color:rgba(29,122,76,0.14) !important;border-radius:2px;}";
+    document.documentElement.appendChild(cleanup.styleEl);
+  }
+
+  function startOverlay(mode) {
+    cleanup.mode = mode;
+    if (cleanup.active) {
+      // Switching modes: reset hover state, keep listeners.
+      cleanup.baseEl = null;
+      cleanup.level = 0;
+      hideBox();
+      updateBar();
+      return;
+    }
+    cleanup.active = true;
+    ensureStyle();
+    if (!cleanup.host) buildOverlay();
+    cleanup.host.style.display = "block";
+    document.addEventListener("mousemove", onMove, true);
+    document.addEventListener("click", onClick, true);
+    document.addEventListener("keydown", onKey, true);
+    updateBar();
+    reportCount();
+  }
+
+  function updateBar() {
+    if (!cleanup.shadow) return;
+    var bar = cleanup.shadow.querySelector(".bar");
+    var hint = cleanup.shadow.querySelector(".hint");
+    var include = cleanup.mode === "include";
+    if (bar) bar.style.display = include ? "none" : "flex";
+    if (hint) hint.textContent = include ? "click a link to add its page" : "click removes · ↑ grows";
+  }
+
   var api = {
     beginCleanup: function () {
-      if (cleanup.active) return;
-      cleanup.active = true;
-      if (!cleanup.styleEl) {
-        cleanup.styleEl = document.createElement("style");
-        cleanup.styleEl.setAttribute(UI_ATTR, "1");
-        cleanup.styleEl.textContent = "[" + REMOVED_ATTR + "]{display:none !important;}";
-        document.documentElement.appendChild(cleanup.styleEl);
-      }
-      if (!cleanup.host) buildOverlay();
-      cleanup.host.style.display = "block";
-      document.addEventListener("mousemove", onMove, true);
-      document.addEventListener("click", onClick, true);
-      document.addEventListener("keydown", onKey, true);
-      reportCount();
+      startOverlay("cleanup");
+    },
+    beginInclude: function () {
+      ensureStyle();
+      paintIncluded();
+      startOverlay("include");
+      reportIncluded();
     },
     endCleanup: function () {
       if (!cleanup.active) return;
@@ -1409,6 +1624,21 @@
       document.removeEventListener("keydown", onKey, true);
       hideBox();
       if (cleanup.host) cleanup.host.style.display = "none";
+    },
+    clearIncluded: function () {
+      INCLUDED = Object.create(null);
+      includedOrder = [];
+      paintIncluded();
+      reportIncluded();
+    },
+    /** Adds the page currently being browsed (the manual fallback). */
+    includeCurrent: function () {
+      var u = location.href.split("#")[0];
+      if (!INCLUDED[u]) {
+        INCLUDED[u] = (document.title || u).slice(0, 90);
+        includedOrder.push(u);
+      }
+      reportIncluded();
     },
     undo: function () {
       var el = cleanup.removed.pop();

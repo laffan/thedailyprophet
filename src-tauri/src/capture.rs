@@ -115,6 +115,9 @@ pub async fn capture_control(
     let js = match action.as_str() {
         "begin_cleanup" => format!("{NS}.beginCleanup();"),
         "end_cleanup" => format!("{NS}.endCleanup();"),
+        "begin_include" => format!("{NS}.beginInclude();"),
+        "include_current" => format!("{NS}.includeCurrent();"),
+        "clear_included" => format!("{NS}.clearIncluded();"),
         "undo" => format!("{NS}.undo();"),
         "restore_all" => format!("{NS}.restoreAll();"),
         "snapshot" => {
@@ -164,6 +167,13 @@ pub fn capture_progress(
 #[tauri::command]
 pub fn capture_count(app: AppHandle, count: u32) -> Result<(), String> {
     let _ = app.emit("capture://count", count);
+    Ok(())
+}
+
+/// The set of linked pages the user picked with the include tool.
+#[tauri::command]
+pub fn capture_included(app: AppHandle, urls: Value) -> Result<(), String> {
+    let _ = app.emit("capture://included", urls);
     Ok(())
 }
 

@@ -7,6 +7,7 @@ import {
   type DocSummary,
   type Highlight,
   type HighlightColor,
+  type PagePosition,
 } from "../types";
 import { el, toast, debounce, uid, domainOf, clamp } from "../util";
 import { promptModal } from "../modal";
@@ -30,6 +31,13 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
   const pendingHighlights = new Map<string, Highlight>();
   let contextReqId = 0;
   const contextWaiters = new Map<number, (p: { snippet: string; y: number; ratio: number; docHeight: number }) => void>();
+  /** Path of the page currently shown (multi-page documents). */
+  let currentPage = "/";
+
+  function pageState(path: string): PagePosition {
+    state.pages = state.pages ?? {};
+    return (state.pages[path] ??= { scrollY: 0, scrollRatio: 0, docHeight: 0 });
+  }
 
   // Legacy snapshots are sandboxed srcdoc documents; archives are served by
   // the app's own URI scheme, where the page needs a real origin so its
@@ -262,6 +270,7 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
       prefix: pendingSelection.prefix,
       suffix: pendingSelection.suffix,
       createdAt: Date.now(),
+      page: currentPage,
     };
     pendingSelection = null;
     hidePopover();
@@ -301,6 +310,7 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
         ratio: cx.ratio,
         docHeight: cx.docHeight,
         createdAt: Date.now(),
+        page: currentPage,
       };
       state.bookmarks.push(bm);
       markDirty();
@@ -309,6 +319,34 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
     } catch (e) {
       toast(`Could not add bookmark: ${e}`, "error");
     }
+  }
+
+  /** Where to scroll (or what to flash) once a page finishes loading. */
+  let pendingJump: { page: string; ratio?: number; highlightId?: string } | null = null;
+
+  function jumpTo(page: string, target: { ratio?: number; highlightId?: string }): void {
+    if (page === currentPage) {
+      if (target.highlightId) post({ type: "scroll-to-highlight", id: target.highlightId });
+      else if (target.ratio !== undefined) post({ type: "scroll-to", ratio: target.ratio, smooth: true });
+      return;
+    }
+    if (!doc || (doc.meta.format ?? 1) < 2) return;
+    pendingJump = { page, ...target };
+    iframe.src = `prophet://${id}${page}`;
+  }
+
+  function pageLabel(page: string | undefined): string | null {
+    if (!page || !doc) return null;
+    let mainPath = "/";
+    try {
+      const u = new URL(doc.meta.sourceUrl);
+      mainPath = u.pathname + u.search;
+    } catch {
+      /* keep */
+    }
+    if (page === mainPath || page === "/") return null;
+    const tail = page.split("?")[0].split("/").filter(Boolean).pop();
+    return tail ? decodeURIComponent(tail).replace(/[-_]+/g, " ").slice(0, 28) : null;
   }
 
   // ---- sidebar -----------------------------------------------------------
@@ -352,7 +390,10 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
       if (!state.bookmarks.length) {
         list.append(el("p.muted.sidebar-empty", null, "No bookmarks yet. Tap the ribbon icon to mark your place."));
       }
-      for (const bm of [...state.bookmarks].sort((a, b) => a.ratio - b.ratio)) {
+      const ordered = [...state.bookmarks].sort(
+        (a, b) => (a.page ?? "").localeCompare(b.page ?? "") || a.ratio - b.ratio,
+      );
+      for (const bm of ordered) {
         list.append(
           el(
             "div.sidebar-item",
@@ -360,10 +401,14 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
             el(
               "button.sidebar-item-main",
               {
-                onclick: () => post({ type: "scroll-to", ratio: bm.ratio, smooth: true }),
+                onclick: () => jumpTo(bm.page ?? currentPage, { ratio: bm.ratio }),
               },
               el("span.sidebar-item-label", null, bm.label),
-              el("span.sidebar-item-sub", null, `${Math.round(bm.ratio * 100)}%`),
+              el(
+                "span.sidebar-item-sub",
+                null,
+                `${pageLabel(bm.page) ? pageLabel(bm.page) + " · " : ""}${Math.round(bm.ratio * 100)}%`,
+              ),
             ),
             el(
               "button.sidebar-item-action",
@@ -410,11 +455,11 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
               "button.sidebar-item-main",
               {
                 onclick: () => {
-                  if (hl.orphaned) {
-                    toast("This highlight's text no longer appears in the snapshot", "error");
+                  if (hl.orphaned && (hl.page ?? currentPage) === currentPage) {
+                    toast("This highlight's text no longer appears in the document", "error");
                     return;
                   }
-                  post({ type: "scroll-to-highlight", id: hl.id });
+                  jumpTo(hl.page ?? currentPage, { highlightId: hl.id });
                 },
               },
               bar,
@@ -443,27 +488,43 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
     if (!d || d.__prophet !== true) return;
     switch (d.type) {
       case "ready": {
+        currentPage = (d.page as string) || "/";
         state.lastOpenedAt = Date.now();
+        state.lastPage = currentPage;
         markDirty();
+        const pos = pageState(currentPage);
+        const mine = state.highlights.filter((h) => (h.page ?? currentPage) === currentPage);
         post({
           type: "init",
-          state: {
-            scrollY: state.scrollY,
-            scrollRatio: state.scrollRatio,
-            docHeight: state.docHeight,
-          },
-          highlights: state.highlights.filter((h) => !h.orphaned).concat(state.highlights.filter((h) => h.orphaned)),
+          state: { scrollY: pos.scrollY, scrollRatio: pos.scrollRatio, docHeight: pos.docHeight },
+          highlights: mine.filter((h) => !h.orphaned).concat(mine.filter((h) => h.orphaned)),
         });
+        renderSidebar();
+        if (pendingJump && pendingJump.page === currentPage) {
+          const jump = pendingJump;
+          pendingJump = null;
+          setTimeout(() => {
+            if (jump.highlightId) post({ type: "scroll-to-highlight", id: jump.highlightId });
+            else if (jump.ratio !== undefined) post({ type: "scroll-to", ratio: jump.ratio, smooth: false });
+          }, 250);
+        }
         break;
       }
       case "scroll": {
         const y = d.y as number;
         const ratio = d.ratio as number;
         const docHeight = d.docHeight as number;
-        state.scrollY = y;
-        state.scrollRatio = ratio;
-        state.docHeight = docHeight;
-        state.progress = ratio;
+        const page = (d.page as string) || currentPage;
+        const pos = pageState(page);
+        pos.scrollY = y;
+        pos.scrollRatio = ratio;
+        pos.docHeight = docHeight;
+        if (page === currentPage) {
+          state.scrollY = y;
+          state.scrollRatio = ratio;
+          state.docHeight = docHeight;
+          state.progress = ratio;
+        }
         progressLabel.textContent = `${Math.round(ratio * 100)}%`;
         markDirty();
         hidePopover();
@@ -503,8 +564,11 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
       }
       case "highlights-applied": {
         const orphaned = new Set(d.orphaned as string[]);
+        const applied = new Set(d.applied as string[]);
         let changed = false;
         for (const hl of state.highlights) {
+          if ((hl.page ?? currentPage) !== currentPage) continue;
+          if (!orphaned.has(hl.id) && !applied.has(hl.id)) continue;
           const is = orphaned.has(hl.id);
           if (!!hl.orphaned !== is) {
             hl.orphaned = is;
