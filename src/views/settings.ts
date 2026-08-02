@@ -8,6 +8,7 @@ import {
   type Settings,
 } from "../api";
 import { el, toast, fmtDate } from "../util";
+import { confirmModal } from "../modal";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
 export function mountSettings(root: HTMLElement, ctx: AppContext): () => void {
@@ -37,9 +38,8 @@ export function mountSettings(root: HTMLElement, ctx: AppContext): () => void {
     ),
   );
 
-  /** iPadOS has no folder picker in Tauri, so the folder is fixed there. */
-  function canPickFolder(): boolean {
-    return platform !== "ios" && platform !== "android";
+  function isMobile(): boolean {
+    return platform === "ios" || platform === "android";
   }
 
   async function save(next: Partial<Settings>): Promise<void> {
@@ -51,20 +51,42 @@ export function mountSettings(root: HTMLElement, ctx: AppContext): () => void {
     }
   }
 
+  /**
+   * Always the user's choice — a sync folder is only useful if they point it
+   * at something that actually syncs (iCloud Drive, Dropbox, a share).
+   */
   async function chooseFolder(): Promise<void> {
-    if (!canPickFolder()) {
-      try {
-        const folder = await defaultSyncFolder();
-        await save({ syncFolder: folder });
-        toast("Sync folder set — it appears in the Files app");
-      } catch (e) {
-        toast(`Could not set the folder: ${e}`, "error");
-      }
+    try {
+      const picked = await openDialog({ directory: true, multiple: false });
+      if (!picked || Array.isArray(picked)) return;
+      await save({ syncFolder: picked });
       return;
+    } catch (e) {
+      if (!isMobile()) {
+        toast(`Could not open the folder picker: ${e}`, "error");
+        return;
+      }
+      // iOS has no folder picker in Tauri's dialog plugin yet.
+      toast("Choosing any folder isn't available on this device yet", "error");
     }
-    const picked = await openDialog({ directory: true, multiple: false });
-    if (!picked || Array.isArray(picked)) return;
-    await save({ syncFolder: picked });
+  }
+
+  /** The explicit fallback on iPadOS — chosen deliberately, never automatic. */
+  async function useAppFolder(): Promise<void> {
+    const ok = await confirmModal({
+      title: "Use this app's Files folder?",
+      body:
+        "The Daily Prophet can only reach its own folder on this device. It appears in the Files app under “On My iPad → The Daily Prophet”, and you can move or copy it into iCloud Drive from there to share it with your Mac. This is not the same as picking an iCloud folder directly.",
+      confirmText: "Use it",
+    });
+    if (!ok) return;
+    try {
+      const folder = await defaultSyncFolder();
+      await save({ syncFolder: folder });
+      toast("Sync folder set — find it in the Files app");
+    } catch (e) {
+      toast(`Could not set the folder: ${e}`, "error");
+    }
   }
 
   async function runSync(): Promise<void> {
@@ -120,13 +142,11 @@ export function mountSettings(root: HTMLElement, ctx: AppContext): () => void {
               el(
                 "div.settings-folder-actions",
                 null,
-                canPickFolder()
-                  ? el(
-                      "button.btn.btn-ghost.btn-small",
-                      { onclick: () => void chooseFolder() },
-                      "Change…",
-                    )
-                  : null,
+                el(
+                  "button.btn.btn-ghost.btn-small",
+                  { onclick: () => void chooseFolder() },
+                  "Change…",
+                ),
                 el(
                   "button.btn.btn-ghost.btn-small",
                   { onclick: () => void save({ syncFolder: null, autoSync: false }) },
@@ -135,9 +155,20 @@ export function mountSettings(root: HTMLElement, ctx: AppContext): () => void {
               ),
             )
           : el(
-              "button.btn.btn-primary",
-              { onclick: () => void chooseFolder() },
-              canPickFolder() ? "Choose a folder…" : "Use the app's Files folder",
+              "div.settings-folder-actions",
+              null,
+              el(
+                "button.btn.btn-primary",
+                { onclick: () => void chooseFolder() },
+                "Choose a folder…",
+              ),
+              isMobile()
+                ? el(
+                    "button.btn.btn-ghost",
+                    { onclick: () => void useAppFolder() },
+                    "Use this app's Files folder",
+                  )
+                : null,
             ),
         folder
           ? el(
@@ -165,11 +196,11 @@ export function mountSettings(root: HTMLElement, ctx: AppContext): () => void {
               ),
             )
           : null,
-        !canPickFolder()
+        isMobile()
           ? el(
               "p.settings-note",
               null,
-              "On iPadOS the app can only sync its own folder, which appears in the Files app under “On My iPad → The Daily Prophet”. Move or copy that folder into iCloud Drive from Files to share it with your Mac.",
+              "Picking any folder you like needs a system folder picker that Tauri's iOS plugin doesn't offer yet, so on iPadOS the app can currently only sync its own Files folder. Pick the folder you want on your Mac; on iPad, use the button above and move that folder into iCloud Drive from the Files app.",
             )
           : null,
       ),

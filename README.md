@@ -123,11 +123,18 @@ npm run tauri ios build  # archive for distribution
 You'll need Xcode and an Apple Developer signing identity configured; see
 the [Tauri iOS guide](https://v2.tauri.app/develop/#developing-your-mobile-application).
 
-**Sync on iPadOS.** Tauri's iOS dialog plugin has no folder picker (it only
-copies chosen *files* into a temp directory), so the sync folder there is the
-app's own Documents folder rather than one you browse to. To make that folder
-visible in the Files app — which is what lets you move or copy it into iCloud
-Drive — add these to the generated `Info.plist` after `tauri ios init`:
+**Sync on iPadOS.** The app never picks a sync folder for you — a folder is
+only useful if *you* point it at something that actually syncs. On macOS the
+system folder picker does exactly that.
+
+On iPadOS there is a real gap: Tauri's iOS dialog plugin builds its picker
+from file content types and has no folder mode (iOS itself supports one via
+`UIDocumentPickerViewController` with `UTType.folder`, but reaching it needs
+a native plugin the app doesn't have yet). Until then iPadOS offers one
+explicit, clearly-labelled alternative — the app's own Files folder, which
+you confirm deliberately. To make that folder visible in the Files app —
+which is what lets you move or copy it into iCloud Drive — add these to the
+generated `Info.plist` after `tauri ios init`:
 
 ```xml
 <key>UIFileSharingEnabled</key><true/>
