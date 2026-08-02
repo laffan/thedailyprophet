@@ -29,6 +29,7 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_icloud_folder::init())
         .manage(Fetcher(client))
         .manage(capture::Staging::default())
         // The offline equivalent of the network: documents and every

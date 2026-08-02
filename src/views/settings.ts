@@ -5,6 +5,8 @@ import {
   syncNow,
   defaultSyncFolder,
   appPlatform,
+  iosPickFolder,
+  iosResolveBookmark,
   type Settings,
 } from "../api";
 import { el, toast, fmtDate } from "../util";
@@ -13,7 +15,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
 export function mountSettings(root: HTMLElement, ctx: AppContext): () => void {
   let disposed = false;
-  let settings: Settings = { syncFolder: null, autoSync: false, lastSyncAt: 0 };
+  let settings: Settings = { syncFolder: null, syncBookmark: null, autoSync: false, lastSyncAt: 0 };
   let platform = "";
   let busy = false;
 
@@ -56,25 +58,50 @@ export function mountSettings(root: HTMLElement, ctx: AppContext): () => void {
    * at something that actually syncs (iCloud Drive, Dropbox, a share).
    */
   async function chooseFolder(): Promise<void> {
+    if (isMobile()) {
+      // iOS: the system folder picker, which also mints the bookmark that
+      // keeps the folder reachable after the app restarts.
+      try {
+        const picked = await iosPickFolder();
+        if (!picked?.path) return;
+        await save({ syncFolder: picked.path, syncBookmark: picked.bookmark });
+        toast("Sync folder set");
+      } catch (e) {
+        toast(`Could not choose a folder: ${e}`, "error");
+      }
+      return;
+    }
     try {
       const picked = await openDialog({ directory: true, multiple: false });
       if (!picked || Array.isArray(picked)) return;
-      await save({ syncFolder: picked });
-      return;
+      await save({ syncFolder: picked, syncBookmark: null });
     } catch (e) {
-      if (!isMobile()) {
-        toast(`Could not open the folder picker: ${e}`, "error");
-        return;
+      toast(`Could not open the folder picker: ${e}`, "error");
+    }
+  }
+
+  /**
+   * iOS drops access to a chosen folder between launches; resolving the
+   * bookmark re-acquires it, and reports the current path in case iCloud
+   * moved the folder.
+   */
+  async function ensureAccess(): Promise<void> {
+    if (!isMobile() || !settings.syncBookmark) return;
+    try {
+      const res = await iosResolveBookmark(settings.syncBookmark);
+      if (res?.path && res.path !== settings.syncFolder) {
+        settings = await setSettings({ ...settings, syncFolder: res.path });
       }
-      // iOS has no folder picker in Tauri's dialog plugin yet.
-      toast("Choosing any folder isn't available on this device yet", "error");
+    } catch (e) {
+      toast(`Could not reach the sync folder — choose it again: ${e}`, "error");
+      throw e;
     }
   }
 
   /** The explicit fallback on iPadOS — chosen deliberately, never automatic. */
   async function useAppFolder(): Promise<void> {
     const ok = await confirmModal({
-      title: "Use this app's Files folder?",
+      title: "Use this app's folder instead?",
       body:
         "The Daily Prophet can only reach its own folder on this device. It appears in the Files app under “On My iPad → The Daily Prophet”, and you can move or copy it into iCloud Drive from there to share it with your Mac. This is not the same as picking an iCloud folder directly.",
       confirmText: "Use it",
@@ -94,6 +121,7 @@ export function mountSettings(root: HTMLElement, ctx: AppContext): () => void {
     busy = true;
     render();
     try {
+      await ensureAccess();
       const r = await syncNow();
       const parts: string[] = [];
       if (r.pulled) parts.push(`${r.pulled} added`);
@@ -149,7 +177,7 @@ export function mountSettings(root: HTMLElement, ctx: AppContext): () => void {
                 ),
                 el(
                   "button.btn.btn-ghost.btn-small",
-                  { onclick: () => void save({ syncFolder: null, autoSync: false }) },
+                  { onclick: () => void save({ syncFolder: null, syncBookmark: null, autoSync: false }) },
                   "Stop syncing",
                 ),
               ),
@@ -166,7 +194,7 @@ export function mountSettings(root: HTMLElement, ctx: AppContext): () => void {
                 ? el(
                     "button.btn.btn-ghost",
                     { onclick: () => void useAppFolder() },
-                    "Use this app's Files folder",
+                    "Use this app's folder instead",
                   )
                 : null,
             ),
@@ -200,7 +228,7 @@ export function mountSettings(root: HTMLElement, ctx: AppContext): () => void {
           ? el(
               "p.settings-note",
               null,
-              "Picking any folder you like needs a system folder picker that Tauri's iOS plugin doesn't offer yet, so on iPadOS the app can currently only sync its own Files folder. Pick the folder you want on your Mac; on iPad, use the button above and move that folder into iCloud Drive from the Files app.",
+              "Choose the same iCloud Drive folder here as on your Mac and the two libraries meet there. iPadOS grants access per selection, so the app keeps a bookmark and re-acquires access each time it syncs.",
             )
           : null,
       ),

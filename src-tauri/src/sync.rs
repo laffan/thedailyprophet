@@ -28,6 +28,10 @@ pub struct Settings {
     /// Absolute path of the folder to mirror into, if configured.
     #[serde(default)]
     pub sync_folder: Option<String>,
+    /// iOS security-scoped bookmark for `sync_folder`. Sandboxed apps lose
+    /// access to a chosen folder on relaunch unless they resolve this first.
+    #[serde(default)]
+    pub sync_bookmark: Option<String>,
     /// Sync on launch and after each capture.
     #[serde(default)]
     pub auto_sync: bool,
@@ -211,8 +215,17 @@ pub fn set_settings(app: AppHandle, settings: Settings) -> Result<Settings, Stri
                 .map_err(|e| format!("could not use that folder: {e}"))?;
             // Prove it's writable now rather than failing at sync time.
             let probe = path.join(".prophet-write-test");
-            fs::write(&probe, b"ok").map_err(|e| format!("that folder is not writable: {e}"))?;
-            let _ = fs::remove_file(&probe);
+            match fs::write(&probe, b"ok") {
+                Ok(_) => {
+                    let _ = fs::remove_file(&probe);
+                }
+                // On iOS the folder is only reachable while its bookmark is
+                // resolved; a failure here isn't necessarily fatal.
+                Err(e) if s.sync_bookmark.is_none() => {
+                    return Err(format!("that folder is not writable: {e}"))
+                }
+                Err(_) => {}
+            }
             s.sync_folder = Some(path.to_string_lossy().into_owned());
         }
     }

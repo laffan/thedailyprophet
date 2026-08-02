@@ -80,8 +80,23 @@ export function captureSnapshot(options: {
 
 export interface Settings {
   syncFolder: string | null;
+  /** iOS security-scoped bookmark that re-grants access after a relaunch. */
+  syncBookmark?: string | null;
   autoSync: boolean;
   lastSyncAt: number;
+}
+
+/**
+ * iOS folder access, via the bundled icloud-folder plugin. Sandboxed apps
+ * cannot keep a chosen folder by path alone: picking mints a bookmark, and
+ * resolving it re-acquires security-scoped access on later launches.
+ */
+export function iosPickFolder(): Promise<{ path: string; bookmark: string; name?: string }> {
+  return invoke("plugin:icloud-folder|pick_folder");
+}
+
+export function iosResolveBookmark(bookmark: string): Promise<{ path: string; stale?: boolean }> {
+  return invoke("plugin:icloud-folder|resolve_bookmark", { bookmark });
 }
 
 export interface SyncReport {

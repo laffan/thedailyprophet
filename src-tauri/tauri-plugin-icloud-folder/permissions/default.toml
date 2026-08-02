@@ -1,0 +1,108 @@
+"$schema" = "schemas/schema.json"
+
+[[permission]]
+identifier = "allow-pick-folder"
+description = "Allow JS to present the iOS folder picker and mint a security-scoped bookmark."
+commands.allow = ["pick_folder"]
+
+[[permission]]
+identifier = "allow-resolve-bookmark"
+description = "Allow JS to resolve a persisted bookmark and re-acquire security-scoped access."
+commands.allow = ["resolve_bookmark"]
+
+[[permission]]
+identifier = "allow-stop-access"
+description = "Allow JS to relinquish security-scoped access to a previously resolved folder."
+commands.allow = ["stop_access"]
+
+[[permission]]
+identifier = "allow-reveal-in-files"
+description = "Allow JS to open the iOS Files app at a folder via the shareddocuments:// scheme."
+commands.allow = ["reveal_in_files"]
+
+[[permission]]
+identifier = "allow-list-dir"
+description = "Allow JS to list the contents of a security-scoped folder."
+commands.allow = ["list_dir"]
+
+[[permission]]
+identifier = "allow-read-file"
+description = "Allow JS to read a file inside a security-scoped folder."
+commands.allow = ["read_file"]
+
+[[permission]]
+identifier = "allow-read-file-bytes"
+description = "Allow JS to read a binary file (e.g. an image) inside a security-scoped folder."
+commands.allow = ["read_file_bytes"]
+
+[[permission]]
+identifier = "allow-write-file"
+description = "Allow JS to write a file inside a security-scoped folder."
+commands.allow = ["write_file"]
+
+[[permission]]
+identifier = "allow-write-file-bytes"
+description = "Allow JS to write a binary file inside a security-scoped folder (collision auto-suffixed)."
+commands.allow = ["write_file_bytes"]
+
+[[permission]]
+identifier = "allow-create-file"
+description = "Allow JS to create a new text file inside a security-scoped folder (collision auto-suffixed)."
+commands.allow = ["create_file"]
+
+[[permission]]
+identifier = "allow-create-dir"
+description = "Allow JS to create a new directory inside a security-scoped folder (collision auto-suffixed)."
+commands.allow = ["create_dir"]
+
+[[permission]]
+identifier = "allow-rename-entry"
+description = "Allow JS to rename a file or directory inside a security-scoped folder."
+commands.allow = ["rename_entry"]
+
+[[permission]]
+identifier = "allow-delete-entry"
+description = "Allow JS to permanently delete a file or directory inside a security-scoped folder."
+commands.allow = ["delete_entry"]
+
+[[permission]]
+identifier = "allow-move-entry"
+description = "Allow JS to move a file or directory into another folder inside a security-scoped folder."
+commands.allow = ["move_entry"]
+
+[[permission]]
+identifier = "allow-copy-entry"
+description = "Allow JS to duplicate a file or directory inside a security-scoped folder."
+commands.allow = ["copy_entry"]
+
+[[permission]]
+identifier = "allow-start-watch"
+description = "Allow JS to arm an NSMetadataQuery live-update watch under a resolved iCloud folder."
+commands.allow = ["start_watch"]
+
+[[permission]]
+identifier = "allow-stop-watch"
+description = "Allow JS to disarm a folder's NSMetadataQuery live-update watch."
+commands.allow = ["stop_watch"]
+
+[default]
+description = "Default permissions: allow the full folder-bookmark demo flow (pick, resolve, list, read, write, stop)."
+permissions = [
+  "allow-pick-folder",
+  "allow-resolve-bookmark",
+  "allow-stop-access",
+  "allow-start-watch",
+  "allow-stop-watch",
+  "allow-reveal-in-files",
+  "allow-list-dir",
+  "allow-read-file",
+  "allow-read-file-bytes",
+  "allow-write-file",
+  "allow-write-file-bytes",
+  "allow-create-file",
+  "allow-create-dir",
+  "allow-rename-entry",
+  "allow-delete-entry",
+  "allow-move-entry",
+  "allow-copy-entry",
+]

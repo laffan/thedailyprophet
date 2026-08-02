@@ -1,0 +1,17 @@
+[package]
+name = "tauri-plugin-icloud-folder"
+version = "0.1.0"
+description = "iOS folder picker + persistent security-scoped bookmarks for Tauri (iCloud Drive / Files.app)"
+edition = "2021"
+rust-version = "1.77"
+links = "tauri-plugin-icloud-folder"
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }
+
+[dependencies]
+tauri = { version = "2" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+log = "0.4"

@@ -3781,6 +3781,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tauri-plugin-icloud-folder"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "tauri-plugin-opener"
 version = "2.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3936,6 +3948,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "tauri-plugin-icloud-folder",
  "tauri-plugin-opener",
  "uuid",
  "zip",

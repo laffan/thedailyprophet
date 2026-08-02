@@ -124,25 +124,25 @@ You'll need Xcode and an Apple Developer signing identity configured; see
 the [Tauri iOS guide](https://v2.tauri.app/develop/#developing-your-mobile-application).
 
 **Sync on iPadOS.** The app never picks a sync folder for you — a folder is
-only useful if *you* point it at something that actually syncs. On macOS the
-system folder picker does exactly that.
+only useful if *you* point it at something that actually syncs. Both
+platforms open a real system folder picker, so you can choose the same
+iCloud Drive folder on your Mac and your iPad.
 
-On iPadOS there is a real gap: Tauri's iOS dialog plugin builds its picker
-from file content types and has no folder mode (iOS itself supports one via
-`UIDocumentPickerViewController` with `UTType.folder`, but reaching it needs
-a native plugin the app doesn't have yet). Until then iPadOS offers one
-explicit, clearly-labelled alternative — the app's own Files folder, which
-you confirm deliberately. To make that folder visible in the Files app —
-which is what lets you move or copy it into iCloud Drive — add these to the
+iOS needs a little more than a path: a sandboxed app loses access to a
+chosen folder when it relaunches. Picking therefore also mints a
+*security-scoped bookmark*, stored alongside the path, and the app resolves
+that bookmark to re-acquire access before each sync (and updates the path if
+iCloud has moved the folder). This is handled by the bundled
+`src-tauri/tauri-plugin-icloud-folder` plugin, adapted from the working
+implementation in [laffan/hush](https://github.com/laffan/hush).
+
+For the app's own folder to be visible in the Files app, add these to the
 generated `Info.plist` after `tauri ios init`:
 
 ```xml
 <key>UIFileSharingEnabled</key><true/>
 <key>LSSupportsOpeningDocumentsInPlace</key><true/>
 ```
-
-The Mac side has a real folder picker, so point it at the same iCloud folder
-and the two libraries meet there.
 
 ## How capture works
 

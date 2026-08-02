@@ -1,0 +1,612 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PermissionFile",
+  "description": "Permission file that can define a default permission, a set of permissions or a list of inlined permissions.",
+  "type": "object",
+  "properties": {
+    "default": {
+      "description": "The default permission set for the plugin",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/DefaultPermission"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "set": {
+      "description": "A list of permissions sets defined",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/PermissionSet"
+      }
+    },
+    "permission": {
+      "description": "A list of inlined permissions",
+      "default": [],
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/Permission"
+      }
+    }
+  },
+  "definitions": {
+    "DefaultPermission": {
+      "description": "The default permission set of the plugin.\n\nWorks similarly to a permission with the \"default\" identifier.",
+      "type": "object",
+      "required": [
+        "permissions"
+      ],
+      "properties": {
+        "version": {
+          "description": "The version of the permission.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 1.0
+        },
+        "description": {
+          "description": "Human-readable description of what the permission does. Tauri convention is to use `<h4>` headings in markdown content for Tauri documentation generation purposes.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permissions": {
+          "description": "All permissions this set contains.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "PermissionSet": {
+      "description": "A set of direct permissions grouped together under a new name.",
+      "type": "object",
+      "required": [
+        "description",
+        "identifier",
+        "permissions"
+      ],
+      "properties": {
+        "identifier": {
+          "description": "A unique identifier for the permission.",
+          "type": "string"
+        },
+        "description": {
+          "description": "Human-readable description of what the permission does.",
+          "type": "string"
+        },
+        "permissions": {
+          "description": "All permissions this set contains.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PermissionKind"
+          }
+        }
+      }
+    },
+    "Permission": {
+      "description": "Descriptions of explicit privileges of commands.\n\nIt can enable commands to be accessible in the frontend of the application.\n\nIf the scope is defined it can be used to fine grain control the access of individual or multiple commands.",
+      "type": "object",
+      "required": [
+        "identifier"
+      ],
+      "properties": {
+        "version": {
+          "description": "The version of the permission.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 1.0
+        },
+        "identifier": {
+          "description": "A unique identifier for the permission.",
+          "type": "string"
+        },
+        "description": {
+          "description": "Human-readable description of what the permission does. Tauri internal convention is to use `<h4>` headings in markdown content for Tauri documentation generation purposes.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "commands": {
+          "description": "Allowed or denied commands when using this permission.",
+          "default": {
+            "allow": [],
+            "deny": []
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/Commands"
+            }
+          ]
+        },
+        "scope": {
+          "description": "Allowed or denied scoped when using this permission.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Scopes"
+            }
+          ]
+        },
+        "platforms": {
+          "description": "Target platforms this permission applies. By default all platforms are affected by this permission.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Target"
+          }
+        }
+      }
+    },
+    "Commands": {
+      "description": "Allowed and denied commands inside a permission.\n\nIf two commands clash inside of `allow` and `deny`, it should be denied by default.",
+      "type": "object",
+      "properties": {
+        "allow": {
+          "description": "Allowed command.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "deny": {
+          "description": "Denied command, which takes priority.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "Scopes": {
+      "description": "An argument for fine grained behavior control of Tauri commands.\n\nIt can be of any serde serializable type and is used to allow or prevent certain actions inside a Tauri command. The configured scope is passed to the command and will be enforced by the command implementation.\n\n## Example\n\n```json { \"allow\": [{ \"path\": \"$HOME/**\" }], \"deny\": [{ \"path\": \"$HOME/secret.txt\" }] } ```",
+      "type": "object",
+      "properties": {
+        "allow": {
+          "description": "Data that defines what is allowed by the scope.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Value"
+          }
+        },
+        "deny": {
+          "description": "Data that defines what is denied by the scope. This should be prioritized by validation logic.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Value"
+          }
+        }
+      }
+    },
+    "Value": {
+      "description": "All supported ACL values.",
+      "anyOf": [
+        {
+          "description": "Represents a null JSON value.",
+          "type": "null"
+        },
+        {
+          "description": "Represents a [`bool`].",
+          "type": "boolean"
+        },
+        {
+          "description": "Represents a valid ACL [`Number`].",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Number"
+            }
+          ]
+        },
+        {
+          "description": "Represents a [`String`].",
+          "type": "string"
+        },
+        {
+          "description": "Represents a list of other [`Value`]s.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Value"
+          }
+        },
+        {
+          "description": "Represents a map of [`String`] keys to [`Value`]s.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/Value"
+          }
+        }
+      ]
+    },
+    "Number": {
+      "description": "A valid ACL number.",
+      "anyOf": [
+        {
+          "description": "Represents an [`i64`].",
+          "type": "integer",
+          "format": "int64"
+        },
+        {
+          "description": "Represents a [`f64`].",
+          "type": "number",
+          "format": "double"
+        }
+      ]
+    },
+    "Target": {
+      "description": "Platform target.",
+      "oneOf": [
+        {
+          "description": "MacOS.",
+          "type": "string",
+          "enum": [
+            "macOS"
+          ]
+        },
+        {
+          "description": "Windows.",
+          "type": "string",
+          "enum": [
+            "windows"
+          ]
+        },
+        {
+          "description": "Linux.",
+          "type": "string",
+          "enum": [
+            "linux"
+          ]
+        },
+        {
+          "description": "Android.",
+          "type": "string",
+          "enum": [
+            "android"
+          ]
+        },
+        {
+          "description": "iOS.",
+          "type": "string",
+          "enum": [
+            "iOS"
+          ]
+        }
+      ]
+    },
+    "PermissionKind": {
+      "type": "string",
+      "oneOf": [
+        {
+          "description": "Enables the copy_entry command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-copy-entry",
+          "markdownDescription": "Enables the copy_entry command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the copy_entry command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-copy-entry",
+          "markdownDescription": "Denies the copy_entry command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the create_dir command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-create-dir",
+          "markdownDescription": "Enables the create_dir command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the create_dir command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-create-dir",
+          "markdownDescription": "Denies the create_dir command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the create_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-create-file",
+          "markdownDescription": "Enables the create_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the create_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-create-file",
+          "markdownDescription": "Denies the create_file command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_entry command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-entry",
+          "markdownDescription": "Enables the delete_entry command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_entry command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-entry",
+          "markdownDescription": "Denies the delete_entry command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_dir command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-dir",
+          "markdownDescription": "Enables the list_dir command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_dir command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-dir",
+          "markdownDescription": "Denies the list_dir command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the move_entry command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-move-entry",
+          "markdownDescription": "Enables the move_entry command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the move_entry command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-move-entry",
+          "markdownDescription": "Denies the move_entry command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the pick_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-pick-folder",
+          "markdownDescription": "Enables the pick_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the pick_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-pick-folder",
+          "markdownDescription": "Denies the pick_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the read_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-read-file",
+          "markdownDescription": "Enables the read_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the read_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-read-file",
+          "markdownDescription": "Denies the read_file command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the read_file_bytes command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-read-file-bytes",
+          "markdownDescription": "Enables the read_file_bytes command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the read_file_bytes command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-read-file-bytes",
+          "markdownDescription": "Denies the read_file_bytes command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the rename_entry command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-rename-entry",
+          "markdownDescription": "Enables the rename_entry command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the rename_entry command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-rename-entry",
+          "markdownDescription": "Denies the rename_entry command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the resolve_bookmark command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-resolve-bookmark",
+          "markdownDescription": "Enables the resolve_bookmark command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the resolve_bookmark command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-resolve-bookmark",
+          "markdownDescription": "Denies the resolve_bookmark command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the reveal_in_files command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-reveal-in-files",
+          "markdownDescription": "Enables the reveal_in_files command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the reveal_in_files command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-reveal-in-files",
+          "markdownDescription": "Denies the reveal_in_files command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the start_watch command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-start-watch",
+          "markdownDescription": "Enables the start_watch command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the start_watch command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-start-watch",
+          "markdownDescription": "Denies the start_watch command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the stop_access command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-stop-access",
+          "markdownDescription": "Enables the stop_access command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the stop_access command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-stop-access",
+          "markdownDescription": "Denies the stop_access command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the stop_watch command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-stop-watch",
+          "markdownDescription": "Enables the stop_watch command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the stop_watch command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-stop-watch",
+          "markdownDescription": "Denies the stop_watch command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the write_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-write-file",
+          "markdownDescription": "Enables the write_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the write_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-write-file",
+          "markdownDescription": "Denies the write_file command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the write_file_bytes command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-write-file-bytes",
+          "markdownDescription": "Enables the write_file_bytes command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the write_file_bytes command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-write-file-bytes",
+          "markdownDescription": "Denies the write_file_bytes command without any pre-configured scope."
+        },
+        {
+          "description": "Default permissions: allow the full folder-bookmark demo flow (pick, resolve, list, read, write, stop).\n#### This default permission set includes:\n\n- `allow-pick-folder`\n- `allow-resolve-bookmark`\n- `allow-stop-access`\n- `allow-start-watch`\n- `allow-stop-watch`\n- `allow-reveal-in-files`\n- `allow-list-dir`\n- `allow-read-file`\n- `allow-read-file-bytes`\n- `allow-write-file`\n- `allow-write-file-bytes`\n- `allow-create-file`\n- `allow-create-dir`\n- `allow-rename-entry`\n- `allow-delete-entry`\n- `allow-move-entry`\n- `allow-copy-entry`",
+          "type": "string",
+          "const": "default",
+          "markdownDescription": "Default permissions: allow the full folder-bookmark demo flow (pick, resolve, list, read, write, stop).\n#### This default permission set includes:\n\n- `allow-pick-folder`\n- `allow-resolve-bookmark`\n- `allow-stop-access`\n- `allow-start-watch`\n- `allow-stop-watch`\n- `allow-reveal-in-files`\n- `allow-list-dir`\n- `allow-read-file`\n- `allow-read-file-bytes`\n- `allow-write-file`\n- `allow-write-file-bytes`\n- `allow-create-file`\n- `allow-create-dir`\n- `allow-rename-entry`\n- `allow-delete-entry`\n- `allow-move-entry`\n- `allow-copy-entry`"
+        },
+        {
+          "description": "Allow JS to present the iOS folder picker and mint a security-scoped bookmark.",
+          "type": "string",
+          "const": "allow-pick-folder",
+          "markdownDescription": "Allow JS to present the iOS folder picker and mint a security-scoped bookmark."
+        },
+        {
+          "description": "Allow JS to resolve a persisted bookmark and re-acquire security-scoped access.",
+          "type": "string",
+          "const": "allow-resolve-bookmark",
+          "markdownDescription": "Allow JS to resolve a persisted bookmark and re-acquire security-scoped access."
+        },
+        {
+          "description": "Allow JS to relinquish security-scoped access to a previously resolved folder.",
+          "type": "string",
+          "const": "allow-stop-access",
+          "markdownDescription": "Allow JS to relinquish security-scoped access to a previously resolved folder."
+        },
+        {
+          "description": "Allow JS to open the iOS Files app at a folder via the shareddocuments:// scheme.",
+          "type": "string",
+          "const": "allow-reveal-in-files",
+          "markdownDescription": "Allow JS to open the iOS Files app at a folder via the shareddocuments:// scheme."
+        },
+        {
+          "description": "Allow JS to list the contents of a security-scoped folder.",
+          "type": "string",
+          "const": "allow-list-dir",
+          "markdownDescription": "Allow JS to list the contents of a security-scoped folder."
+        },
+        {
+          "description": "Allow JS to read a file inside a security-scoped folder.",
+          "type": "string",
+          "const": "allow-read-file",
+          "markdownDescription": "Allow JS to read a file inside a security-scoped folder."
+        },
+        {
+          "description": "Allow JS to read a binary file (e.g. an image) inside a security-scoped folder.",
+          "type": "string",
+          "const": "allow-read-file-bytes",
+          "markdownDescription": "Allow JS to read a binary file (e.g. an image) inside a security-scoped folder."
+        },
+        {
+          "description": "Allow JS to write a file inside a security-scoped folder.",
+          "type": "string",
+          "const": "allow-write-file",
+          "markdownDescription": "Allow JS to write a file inside a security-scoped folder."
+        },
+        {
+          "description": "Allow JS to write a binary file inside a security-scoped folder (collision auto-suffixed).",
+          "type": "string",
+          "const": "allow-write-file-bytes",
+          "markdownDescription": "Allow JS to write a binary file inside a security-scoped folder (collision auto-suffixed)."
+        },
+        {
+          "description": "Allow JS to create a new text file inside a security-scoped folder (collision auto-suffixed).",
+          "type": "string",
+          "const": "allow-create-file",
+          "markdownDescription": "Allow JS to create a new text file inside a security-scoped folder (collision auto-suffixed)."
+        },
+        {
+          "description": "Allow JS to create a new directory inside a security-scoped folder (collision auto-suffixed).",
+          "type": "string",
+          "const": "allow-create-dir",
+          "markdownDescription": "Allow JS to create a new directory inside a security-scoped folder (collision auto-suffixed)."
+        },
+        {
+          "description": "Allow JS to rename a file or directory inside a security-scoped folder.",
+          "type": "string",
+          "const": "allow-rename-entry",
+          "markdownDescription": "Allow JS to rename a file or directory inside a security-scoped folder."
+        },
+        {
+          "description": "Allow JS to permanently delete a file or directory inside a security-scoped folder.",
+          "type": "string",
+          "const": "allow-delete-entry",
+          "markdownDescription": "Allow JS to permanently delete a file or directory inside a security-scoped folder."
+        },
+        {
+          "description": "Allow JS to move a file or directory into another folder inside a security-scoped folder.",
+          "type": "string",
+          "const": "allow-move-entry",
+          "markdownDescription": "Allow JS to move a file or directory into another folder inside a security-scoped folder."
+        },
+        {
+          "description": "Allow JS to duplicate a file or directory inside a security-scoped folder.",
+          "type": "string",
+          "const": "allow-copy-entry",
+          "markdownDescription": "Allow JS to duplicate a file or directory inside a security-scoped folder."
+        },
+        {
+          "description": "Allow JS to arm an NSMetadataQuery live-update watch under a resolved iCloud folder.",
+          "type": "string",
+          "const": "allow-start-watch",
+          "markdownDescription": "Allow JS to arm an NSMetadataQuery live-update watch under a resolved iCloud folder."
+        },
+        {
+          "description": "Allow JS to disarm a folder's NSMetadataQuery live-update watch.",
+          "type": "string",
+          "const": "allow-stop-watch",
+          "markdownDescription": "Allow JS to disarm a folder's NSMetadataQuery live-update watch."
+        }
+      ]
+    }
+  }
+}
