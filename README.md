@@ -115,14 +115,17 @@ npm run icon
 
 ### iPadOS
 
-Reading, bookmarks, highlights and `.prophet` import/export all work on
-iPadOS. The capture flow already renders as a modal inside the main window,
-but embedding a second webview (`Window::add_child`) is desktop-only in
-Tauri today, so capture is desktop-only in this version. The platform is
-resolved once before the first view mounts, and the capture section is left
-out of the UI entirely on iPadOS rather than shown disabled — as is *Add
-pages* in the reader's edit bar, which needs the same webview. Removing
-elements is local, so it works everywhere.
+Reading, bookmarks, highlights, folder sync and `.prophet` import/export all
+work on iPadOS. **Capture does not**: it needs a second embedded webview,
+and `Window::add_child` is desktop-only in Tauri today. That is an API gap
+rather than a platform restriction — wry and the Tauri runtime both handle
+iOS already. [WEBVIEW_SHIM.md](WEBVIEW_SHIM.md) has the evidence and specs
+the Swift plugin that would close it.
+
+The platform is resolved once before the first view mounts, so the capture
+section is left out of the iPadOS UI entirely rather than shown disabled —
+as is *Add pages* in the reader's edit bar, which needs the same webview.
+Removing elements is local, so it works everywhere.
 
 iPadOS also draws its status bar over the top of the webview. The viewport
 is `viewport-fit=cover` and the topmost chrome of each view adds
@@ -133,6 +136,7 @@ on macOS — so there is one code path rather than a platform branch.
 npm run tauri ios init   # one-time; generates the Xcode project in src-tauri/gen
 npm run tauri ios dev    # run on simulator/device
 npm run tauri ios build  # archive for distribution
+npm run build:ios        # build + install on a connected device (needs ios-deploy)
 ```
 
 You'll need Xcode and an Apple Developer signing identity configured; see
@@ -189,9 +193,9 @@ main webview (modal sheet UI)     capture child webview (the page itself,
 Remote pages can only reach Tauri commands that are explicitly granted:
 `build.rs` declares the app's ACL manifest (which gates *every* app command),
 `capabilities/main.json` grants the library/reader commands to the main
-webview, and `capabilities/capture.json` grants exactly the six `capture_*`
-reporting commands to remote URLs in the capture webview. All six treat
-their caller as untrusted.
+webview, and `capabilities/capture.json` grants the twelve `capture_*`
+reporting commands — and nothing else — to remote URLs in the capture
+webview. All twelve treat their caller as untrusted.
 
 ## How reading works
 
@@ -240,7 +244,9 @@ between machines is stable; otherwise a fresh id is minted.
 
 ## Known limitations (v1)
 
-- Capture is desktop-only; iPadOS reads and imports.
+- Capture is desktop-only; iPadOS reads, imports and syncs. This is a gap
+  in Tauri's mobile API, not an iPadOS restriction —
+  [WEBVIEW_SHIM.md](WEBVIEW_SHIM.md) has the detail.
 - Same-origin iframes are captured one level deep; cross-origin iframes
   become placeholders.
 - Video/audio larger than the per-resource cap (30 MB) is linked, not
@@ -264,8 +270,9 @@ between machines is stable; otherwise a fresh id is minted.
 
 ## Roadmap ideas
 
-- iCloud/Files sync of the library
 - Full-text search across the shelf
-- Notes on highlights, and highlight export (Markdown)
+- Notes on highlights
 - Reader themes (typography override for non-interactive captures)
-- Capture on iPadOS via an embedded browse sheet
+- Capture on iPadOS — specced in [WEBVIEW_SHIM.md](WEBVIEW_SHIM.md)
+- Deleting an annotation on one device propagating to the others (sync
+  currently unions, so a deletion returns on the next pass)
