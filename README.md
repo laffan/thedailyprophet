@@ -79,6 +79,10 @@ Built on [Tauri 2.0](https://v2.tauri.app).
   folder are named after the document (`The Elevator Story.prophet`), and are
   matched by the id stored inside each archive rather than by filename — so
   renaming a document renames its file without breaking the pairing.
+  Reading state is kept *out* of the archive, in a small per-document file
+  under `Reading state/` — so annotating a 30 MB document uploads a few
+  hundred bytes, and the archive itself is only republished when its content
+  actually changes (a capture, an edit, added pages).
 - **Annotation export** — save a document's highlights and bookmarks as
   Markdown, JSON, CSV or plain text, from the shelf's ⋯ menu or the reader.
   The reader's sidebar doubles as an annotation browser: highlights are

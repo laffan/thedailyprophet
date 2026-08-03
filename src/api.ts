@@ -116,6 +116,8 @@ export interface SyncReport {
   pushed: number;
   pulled: number;
   merged: number;
+  /** Reading-state sidecars written (small, frequent). */
+  states: number;
   unchanged: number;
   errors: string[];
   folder: string;

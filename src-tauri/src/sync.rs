@@ -45,6 +45,8 @@ pub struct SyncReport {
     pub pushed: u32,
     pub pulled: u32,
     pub merged: u32,
+    /// Reading-state sidecars written out (cheap, frequent).
+    pub states: u32,
     pub unchanged: u32,
     pub errors: Vec<String>,
     pub folder: String,
@@ -82,13 +84,45 @@ fn mtime_ms(path: &Path) -> u64 {
         .unwrap_or(0)
 }
 
-/// Newest mtime among the files that change when a document is edited.
-fn local_stamp(dir: &Path) -> u64 {
-    ["state.json", "meta.json"]
-        .iter()
-        .map(|n| mtime_ms(&dir.join(n)))
-        .max()
-        .unwrap_or(0)
+/// Where the small per-document reading-state files live in the sync folder.
+///
+/// Reading state changes constantly — every scroll update rewrites it — while
+/// a document's content never changes after capture. Keeping them apart means
+/// annotating a 30 MB archive re-uploads a few hundred bytes instead of the
+/// whole thing.
+const STATE_DIR: &str = "Reading state";
+
+fn state_dir(folder: &Path) -> PathBuf {
+    folder.join(STATE_DIR)
+}
+
+fn sidecar_path(folder: &Path, id: &str) -> PathBuf {
+    state_dir(folder).join(format!("{id}.json"))
+}
+
+/// Newest mtime among the files that make up a document's *content*.
+/// Deliberately excludes `state.json`, which is what makes reading cheap.
+fn content_stamp(dir: &Path) -> u64 {
+    let mut newest = 0u64;
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name == "state.json" {
+                continue;
+            }
+            let path = entry.path();
+            if path.is_dir() {
+                if let Ok(inner) = fs::read_dir(&path) {
+                    for f in inner.flatten() {
+                        newest = newest.max(mtime_ms(&f.path()));
+                    }
+                }
+            } else {
+                newest = newest.max(mtime_ms(&path));
+            }
+        }
+    }
+    newest
 }
 
 /// A filename a person can recognise. The document id lives inside the
@@ -365,21 +399,28 @@ pub fn run_sync(app: &AppHandle, folder: &Path) -> Result<SyncReport, String> {
             // A .prophet we can identify.
             Some(id) if root_docs.contains(id) => {
                 let local_dir = root.join(id);
-                match crate::transfer::read_state_from_archive(&entry.path) {
-                    Ok(Some(remote_state)) => {
-                        let local_state = read_state(&local_dir);
-                        let merged = merge_state(&local_state, &remote_state);
-                        if merged != local_state {
-                            let raw = serde_json::to_string(&merged).map_err(|e| e.to_string())?;
-                            if let Err(e) = fs::write(local_dir.join("state.json"), raw) {
-                                report.errors.push(format!("{id}: {e}"));
-                            } else {
-                                report.merged += 1;
-                            }
+                // The sidecar is authoritative; the copy inside the archive is
+                // only a fallback for documents shared as a single file.
+                let remote_state = fs::read_to_string(sidecar_path(folder, id))
+                    .ok()
+                    .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+                    .filter(|v| v.is_object())
+                    .or_else(|| {
+                        crate::transfer::read_state_from_archive(&entry.path)
+                            .ok()
+                            .flatten()
+                    });
+                if let Some(remote_state) = remote_state {
+                    let local_state = read_state(&local_dir);
+                    let merged = merge_state(&local_state, &remote_state);
+                    if merged != local_state {
+                        let raw = serde_json::to_string(&merged).map_err(|e| e.to_string())?;
+                        if let Err(e) = fs::write(local_dir.join("state.json"), raw) {
+                            report.errors.push(format!("{id}: {e}"));
+                        } else {
+                            report.merged += 1;
                         }
                     }
-                    Ok(None) => {}
-                    Err(e) => report.errors.push(format!("{id}: {e}")),
                 }
             }
             _ => {
@@ -458,10 +499,29 @@ pub fn run_sync(app: &AppHandle, folder: &Path) -> Result<SyncReport, String> {
             }
         };
 
-        let local = local_stamp(&dir);
+        // The reading-state sidecar: tiny, and the only thing that changes
+        // while someone is simply reading.
+        let sidecar = sidecar_path(folder, &id);
+        let local_state_at = mtime_ms(&dir.join("state.json"));
+        if local_state_at > 0 && mtime_ms(&sidecar) + 1000 < local_state_at {
+            let state = read_state(&dir);
+            if state.is_object() {
+                let write = fs::create_dir_all(state_dir(folder)).and_then(|_| {
+                    fs::write(&sidecar, serde_json::to_string(&state).unwrap_or_default())
+                });
+                match write {
+                    Ok(_) => report.states += 1,
+                    Err(e) => report.errors.push(format!("{id} state: {e}")),
+                }
+            }
+        }
+
+        // The archive itself only moves when the document's content does —
+        // capture, an edit, or added pages. Reading never republishes it.
+        let content = content_stamp(&dir);
         // A one-second grace avoids re-pushing on filesystems with coarse
-        // timestamps, and the merge step above may have just touched state.
-        if dest.exists() && mtime_ms(&dest) + 1000 >= local {
+        // timestamps.
+        if dest.exists() && mtime_ms(&dest) + 1000 >= content {
             report.unchanged += 1;
             continue;
         }
@@ -496,6 +556,78 @@ mod tests {
             scripts: true,
             format: 2,
         }
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("prophet-test-{name}"));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// The point of the sidecar split: reading a document must not make its
+    /// archive look stale, or every scroll would re-upload the whole thing.
+    #[test]
+    fn reading_does_not_make_the_archive_look_changed() {
+        let dir = scratch("content-stamp");
+        fs::write(dir.join("meta.json"), "{}").unwrap();
+        fs::write(dir.join("main.html"), "<html></html>").unwrap();
+        fs::write(dir.join("state.json"), r#"{"scrollY":0}"#).unwrap();
+
+        let before = content_stamp(&dir);
+        assert!(before > 0, "content stamp should see the content files");
+
+        // Simulate reading: only state.json is rewritten, later.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        fs::write(dir.join("state.json"), r#"{"scrollY":9000}"#).unwrap();
+
+        assert_eq!(
+            content_stamp(&dir),
+            before,
+            "reading changed the content stamp, so the archive would be re-uploaded",
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// ...but editing the document really does republish it.
+    #[test]
+    fn editing_content_does_make_the_archive_stale() {
+        let dir = scratch("content-stamp-edit");
+        fs::write(dir.join("meta.json"), "{}").unwrap();
+        let before = content_stamp(&dir);
+
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        fs::write(dir.join("cleanup.json"), r#"{"/":["p"]}"#).unwrap();
+
+        assert!(
+            content_stamp(&dir) > before,
+            "an edit should mark the archive for re-upload",
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Resources live in a subfolder, so the stamp has to look inside it.
+    #[test]
+    fn content_stamp_sees_resources() {
+        let dir = scratch("content-stamp-res");
+        fs::write(dir.join("meta.json"), "{}").unwrap();
+        let before = content_stamp(&dir);
+
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        fs::create_dir_all(dir.join("res")).unwrap();
+        fs::write(dir.join("res").join("a.js"), "x").unwrap();
+
+        assert!(content_stamp(&dir) > before, "added resources were not noticed");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sidecars_are_small_and_named_by_id() {
+        let folder = scratch("sidecar");
+        let p = sidecar_path(&folder, "abc-123");
+        assert!(p.ends_with("abc-123.json"));
+        assert!(p.parent().unwrap().ends_with(STATE_DIR));
+        let _ = fs::remove_dir_all(&folder);
     }
 
     #[test]
