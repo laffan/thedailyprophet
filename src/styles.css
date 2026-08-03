@@ -16,6 +16,12 @@
   --shadow-soft: 0 4px 14px rgba(48, 36, 18, 0.14);
   --serif: "Iowan Old Style", "Palatino", "Palatino Linotype", "Book Antiqua", Georgia, "Times New Roman", serif;
   --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Helvetica, Arial, sans-serif;
+
+  /* iPadOS draws its status bar over the top of the webview (the viewport is
+     `viewport-fit=cover`), so the topmost chrome in every view adds this to
+     its own padding. Zero on macOS, so there is one code path. */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -141,7 +147,7 @@ button {
 /* ---- masthead ---- */
 
 .masthead {
-  padding: 22px 40px 0;
+  padding: calc(22px + var(--safe-top)) 40px 0;
 }
 .masthead .capture-bar {
   max-width: 940px;
@@ -152,6 +158,8 @@ button {
   display: flex;
   gap: 2px;
   flex: none;
+  /* Stays right when capture is absent and nothing else is growing. */
+  margin-left: auto;
 }
 .masthead-rule {
   margin: 18px auto 0;
@@ -577,7 +585,7 @@ button {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 9px 14px;
+  padding: calc(9px + var(--safe-top)) 14px 9px;
   border-bottom: 1px solid var(--rule);
   background: var(--paper-raised);
   position: relative;
@@ -816,7 +824,7 @@ button {
 
 .toast-root {
   position: fixed;
-  bottom: 22px;
+  bottom: calc(22px + var(--safe-bottom));
   left: 50%;
   transform: translateX(-50%);
   z-index: 200;
@@ -900,7 +908,7 @@ button {
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 12px 18px;
+  padding: calc(12px + var(--safe-top)) 18px 12px;
   border-bottom: 1px solid var(--rule);
   background: var(--paper-raised);
   position: sticky;

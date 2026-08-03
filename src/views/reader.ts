@@ -5,7 +5,6 @@ import {
   saveState,
   exportDocument,
   editSetRemovals,
-  appPlatform,
 } from "../api";
 import {
   emptyState,
@@ -134,11 +133,7 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
   let editMode: "remove" | "add" = "remove";
   // Adding pages needs the capture webview, which Tauri only offers on
   // desktop; removing elements is local and works everywhere.
-  let canAddPages = true;
-  void appPlatform().then((p) => {
-    canAddPages = p !== "ios" && p !== "android";
-    if (editing) renderEditBar();
-  });
+  const canAddPages = ctx.canCapture;
   let editCounts = { removed: 0, added: [] as Array<{ url: string; label: string }> };
   let editReqId = 0;
   const editWaiters = new Map<

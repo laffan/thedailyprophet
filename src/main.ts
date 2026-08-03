@@ -1,7 +1,7 @@
 import "./styles.css";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { importDocument } from "./api";
+import { appPlatform, importDocument } from "./api";
 import { toast } from "./util";
 import { mountLibrary } from "./views/library";
 import { mountCapture } from "./views/capture";
@@ -16,11 +16,16 @@ export type Route =
 
 export interface AppContext {
   navigate: (route: Route) => void;
+  /** `"macos"`, `"ios"`, … — resolved before the first view mounts. */
+  platform: string;
+  /** Capture needs a second webview, which Tauri only embeds on desktop. */
+  canCapture: boolean;
 }
 
 const root = document.getElementById("app")!;
 let cleanup: (() => void) | null = null;
 let current: Route = { name: "library" };
+let platform = "";
 
 function navigate(route: Route): void {
   if (cleanup) {
@@ -34,7 +39,11 @@ function navigate(route: Route): void {
   current = route;
   root.innerHTML = "";
   root.dataset.view = route.name;
-  const ctx: AppContext = { navigate };
+  const ctx: AppContext = {
+    navigate,
+    platform,
+    canCapture: platform !== "ios" && platform !== "android",
+  };
   if (route.name === "library") cleanup = mountLibrary(root, ctx);
   else if (route.name === "capture") cleanup = mountCapture(root, ctx, route.url, route.append);
   else if (route.name === "settings") cleanup = mountSettings(root, ctx);
@@ -42,6 +51,11 @@ function navigate(route: Route): void {
 }
 
 async function init(): Promise<void> {
+  // Settled before anything mounts: views that differ by platform (the whole
+  // capture section is desktop-only) should render right the first time
+  // rather than appear and then retract.
+  platform = await appPlatform().catch(() => "");
+
   // Documents imported out-of-band (file association, dock drop handled by Rust).
   await listen<{ meta: { title: string } }>("library://imported", (e) => {
     toast(`Imported “${e.payload.meta.title}”`);

@@ -118,8 +118,16 @@ npm run icon
 Reading, bookmarks, highlights and `.prophet` import/export all work on
 iPadOS. The capture flow already renders as a modal inside the main window,
 but embedding a second webview (`Window::add_child`) is desktop-only in
-Tauri today, so capture is desktop-only in this version (the capture
-command returns a friendly error on iOS).
+Tauri today, so capture is desktop-only in this version. The platform is
+resolved once before the first view mounts, and the capture section is left
+out of the UI entirely on iPadOS rather than shown disabled — as is *Add
+pages* in the reader's edit bar, which needs the same webview. Removing
+elements is local, so it works everywhere.
+
+iPadOS also draws its status bar over the top of the webview. The viewport
+is `viewport-fit=cover` and the topmost chrome of each view adds
+`env(safe-area-inset-top)` to its padding (via `--safe-top`), which is `0px`
+on macOS — so there is one code path rather than a platform branch.
 
 ```sh
 npm run tauri ios init   # one-time; generates the Xcode project in src-tauri/gen
@@ -249,8 +257,6 @@ between machines is stable; otherwise a fresh id is minted.
   does not delete it on the others — it returns on the next sync. Sync is
   also a folder mirror, not a live watcher: it runs when you press **Sync
   now**, or after a capture/import when automatic sync is on.
-- On iPadOS the sync folder is the app's own Files folder (see above), not
-  an arbitrary folder you pick.
 - Included pages are loaded in a hidden frame and scrolled, but only assets
   the page requests on its own are captured. Something that loads solely in
   response to an interaction nobody performed (a sound tied to one button,

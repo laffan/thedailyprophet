@@ -5,7 +5,6 @@ import {
   renameDocument,
   exportDocument,
   importDocument,
-  appPlatform,
 } from "../api";
 import type { DocSummary } from "../types";
 import { el, toast, fmtDate, fmtBytes, domainOf } from "../util";
@@ -34,6 +33,7 @@ export function mountLibrary(root: HTMLElement, ctx: AppContext): () => void {
   }) as HTMLInputElement;
 
   const startCapture = () => {
+    if (!ctx.canCapture) return;
     const raw = urlInput.value.trim();
     if (!raw) return;
     const url = /^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : `https://${raw}`;
@@ -90,6 +90,9 @@ export function mountLibrary(root: HTMLElement, ctx: AppContext): () => void {
     importIcon(),
   );
 
+  // On iPadOS capture isn't available at all, so the address field and its
+  // button are left out rather than shown disabled — a control that can
+  // never do anything is worse than no control.
   root.append(
     el(
       "header.masthead",
@@ -97,8 +100,8 @@ export function mountLibrary(root: HTMLElement, ctx: AppContext): () => void {
       el(
         "div.capture-bar",
         null,
-        urlInput,
-        el("button.btn.btn-primary", { onclick: startCapture }, "Capture"),
+        ctx.canCapture ? urlInput : null,
+        ctx.canCapture ? el("button.btn.btn-primary", { onclick: startCapture }, "Capture") : null,
         el("div.masthead-actions", null, importBtn, settingsBtn),
       ),
       el("div.masthead-rule"),
@@ -135,7 +138,9 @@ export function mountLibrary(root: HTMLElement, ctx: AppContext): () => void {
           el(
             "p",
             null,
-            "Paste a link above to capture your first story, or drop a .prophet file anywhere in this window.",
+            ctx.canCapture
+              ? "Paste a link above to capture your first story, or drop a .prophet file anywhere in this window."
+              : "Import a .prophet file with the button above, or set a shared folder in Settings to receive stories captured on your Mac.",
           ),
         ),
       );
@@ -286,13 +291,6 @@ export function mountLibrary(root: HTMLElement, ctx: AppContext): () => void {
   }
 
   void refresh();
-  // On iPadOS the capture flow (separate browse window) is not available in v1.
-  void appPlatform().then((p) => {
-    if (p === "ios" && !disposed) {
-      urlInput.disabled = true;
-      urlInput.placeholder = "Capture is desktop-only for now — import .prophet files here";
-    }
-  });
 
   return () => {
     disposed = true;
