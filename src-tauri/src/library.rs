@@ -150,7 +150,12 @@ fn cover_data_uri(dir: &Path, meta: &DocMeta) -> Option<String> {
 }
 
 pub fn summary_for(dir: &Path) -> Result<DocSummary, String> {
-    let meta = read_meta(dir)?;
+    let mut meta = read_meta(dir)?;
+    // Measure rather than trust: a stored size is only as good as whoever
+    // last wrote it, and an import once recorded the page alone — showing a
+    // 30 MB archive as 510 KB. Reading it off disk also repairs documents
+    // imported before that was fixed, without a re-import.
+    meta.size_bytes = content_size(dir);
     let state = read_state(dir);
     let cover = cover_data_uri(dir, &meta);
     Ok(DocSummary {
@@ -158,6 +163,23 @@ pub fn summary_for(dir: &Path) -> Result<DocSummary, String> {
         state,
         cover_data_uri: cover,
     })
+}
+
+/// The document's real size on disk: the page plus every stored resource.
+///
+/// `res/` is flat by construction (`archive::store_resource`), so a single
+/// directory read covers it; `metadata` only stats, it never reads bytes.
+pub fn content_size(dir: &Path) -> u64 {
+    let mut total = 0u64;
+    for name in ["main.html", "snapshot.html"] {
+        total += fs::metadata(dir.join(name)).map(|m| m.len()).unwrap_or(0);
+    }
+    if let Ok(entries) = fs::read_dir(dir.join("res")) {
+        for entry in entries.flatten() {
+            total += entry.metadata().map(|m| m.len()).unwrap_or(0);
+        }
+    }
+    total
 }
 
 pub fn write_meta(dir: &Path, meta: &DocMeta) -> Result<(), String> {
@@ -171,7 +193,6 @@ pub fn create_document(app: &AppHandle, new: NewDocument) -> Result<DocSummary, 
     let dir = doc_dir(app, &id)?;
     fs::create_dir_all(&dir).map_err(|e| format!("could not create document dir: {e}"))?;
 
-    let size_bytes = new.html.len() as u64;
     fs::write(dir.join("snapshot.html"), &new.html)
         .map_err(|e| format!("could not write snapshot: {e}"))?;
 
@@ -198,7 +219,7 @@ pub fn create_document(app: &AppHandle, new: NewDocument) -> Result<DocSummary, 
         author: new.author,
         excerpt: new.excerpt,
         created_at: now_ms(),
-        size_bytes,
+        size_bytes: content_size(&dir),
         cover: cover_name,
         scripts: new.scripts,
         format: 1,
@@ -300,4 +321,79 @@ pub fn delete_document(app: AppHandle, id: String) -> Result<(), String> {
 #[tauri::command]
 pub fn platform() -> String {
     std::env::consts::OS.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("prophet-size-{name}"));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("res")).unwrap();
+        dir
+    }
+
+    /// The bug this guards: a 30 MB document was reported as 510 KB because
+    /// the size was taken from the page alone and the resources — nearly all
+    /// of the weight — were never counted.
+    #[test]
+    fn size_counts_the_resources_not_just_the_page() {
+        let dir = scratch("resources");
+        fs::write(dir.join("main.html"), vec![b'x'; 1000]).unwrap();
+        for i in 0..20 {
+            fs::write(dir.join("res").join(format!("r{i}.js")), vec![b'y'; 5000]).unwrap();
+        }
+        assert_eq!(content_size(&dir), 1000 + 20 * 5000);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Legacy single-file snapshots have no `res/` at all.
+    #[test]
+    fn size_of_a_legacy_snapshot_is_the_snapshot() {
+        let dir = scratch("legacy");
+        fs::remove_dir(dir.join("res")).unwrap();
+        fs::write(dir.join("snapshot.html"), vec![b'x'; 4096]).unwrap();
+        assert_eq!(content_size(&dir), 4096);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Reading a document (state, meta, cover) must not inflate its size —
+    /// the shelf reports content, not bookkeeping.
+    #[test]
+    fn size_ignores_state_and_metadata() {
+        let dir = scratch("state");
+        fs::write(dir.join("main.html"), vec![b'x'; 100]).unwrap();
+        fs::write(dir.join("res").join("a.css"), vec![b'y'; 200]).unwrap();
+        let before = content_size(&dir);
+        fs::write(dir.join("state.json"), vec![b'z'; 9999]).unwrap();
+        fs::write(dir.join("meta.json"), vec![b'z'; 9999]).unwrap();
+        assert_eq!(content_size(&dir), before);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A stale size in `meta.json` is corrected on read, so documents
+    /// imported before the fix repair themselves without a re-import.
+    #[test]
+    fn a_stale_stored_size_is_repaired_when_the_document_is_listed() {
+        let dir = scratch("stale");
+        fs::write(dir.join("main.html"), vec![b'x'; 1024]).unwrap();
+        fs::write(dir.join("res").join("big.js"), vec![b'y'; 500_000]).unwrap();
+        let meta = DocMeta {
+            id: "doc".into(),
+            title: "A Story".into(),
+            source_url: "https://example.com/x".into(),
+            author: None,
+            excerpt: None,
+            created_at: 1,
+            size_bytes: 1024, // what the old import path recorded
+            cover: None,
+            scripts: true,
+            format: 2,
+        };
+        write_meta(&dir, &meta).unwrap();
+        let summary = summary_for(&dir).unwrap();
+        assert_eq!(summary.meta.size_bytes, 1024 + 500_000);
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

@@ -55,7 +55,14 @@ pub fn export_document_to(app: &AppHandle, id: &str, dest_path: &Path) -> Result
         let name = entry.file_name().to_string_lossy().into_owned();
         let allowed = matches!(
             name.as_str(),
-            "meta.json" | "state.json" | "snapshot.html" | "main.html" | "resources.json"
+            "meta.json"
+                | "state.json"
+                | "snapshot.html"
+                | "main.html"
+                | "resources.json"
+                // Post-capture removals live here, not in the page — without
+                // them an edited document arrives un-edited on the next device.
+                | "cleanup.json"
         ) || name.starts_with("cover.");
         if !allowed || !entry.path().is_file() {
             continue;
@@ -97,7 +104,6 @@ pub fn import_webarchive(app: &AppHandle, path: &Path) -> Result<DocSummary, Str
     let result = (|| -> Result<DocSummary, String> {
         let origin = crate::archive::origin_of(&wa.main_url);
         let mut entries = Vec::new();
-        let mut total: u64 = 0;
 
         for (url, mime, bytes) in &wa.resources {
             // Data URLs are already self-contained; leave them in the markup.
@@ -113,7 +119,6 @@ pub fn import_webarchive(app: &AppHandle, path: &Path) -> Result<DocSummary, Str
             } else {
                 bytes.clone()
             };
-            total += stored.len() as u64;
             entries.push(crate::archive::store_resource(&dir, url, mime, &stored)?);
         }
         crate::archive::write_manifest(&dir, &entries)?;
@@ -136,7 +141,8 @@ pub fn import_webarchive(app: &AppHandle, path: &Path) -> Result<DocSummary, Str
             author: None,
             excerpt: extract_meta(&html_raw, "description"),
             created_at: library::now_ms(),
-            size_bytes: html.len() as u64 + total,
+            // Measured from disk, after the page and its resources landed.
+            size_bytes: library::content_size(&dir),
             cover: None,
             scripts: true,
             format: 2,
@@ -275,7 +281,6 @@ pub fn import_from_path(app: &AppHandle, path: &Path) -> Result<DocSummary, Stri
         uuid::Uuid::new_v4().to_string()
     };
     meta.id = id.clone();
-    meta.size_bytes = html.len() as u64;
     if meta.created_at == 0 {
         meta.created_at = library::now_ms();
     }
@@ -290,7 +295,9 @@ pub fn import_from_path(app: &AppHandle, path: &Path) -> Result<DocSummary, Stri
         let (name, bytes) = match zip.by_index(i) {
             Ok(mut f) => {
                 let name = f.name().to_string();
-                if !(name == "resources.json" || name.starts_with("res/")) || name.contains("..") {
+                let wanted =
+                    name == "resources.json" || name == "cleanup.json" || name.starts_with("res/");
+                if !wanted || name.contains("..") {
                     continue;
                 }
                 let mut buf = Vec::new();
@@ -311,6 +318,9 @@ pub fn import_from_path(app: &AppHandle, path: &Path) -> Result<DocSummary, Stri
     if let Some((name, bytes)) = cover_bytes {
         fs::write(dir.join(name), bytes).map_err(|e| e.to_string())?;
     }
+    // Measured after the resources land, so the shelf reports what the
+    // document actually weighs rather than just its page.
+    meta.size_bytes = library::content_size(&dir);
     library::write_meta(&dir, &meta)?;
 
     library::summary_for(&dir)

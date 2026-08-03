@@ -220,6 +220,7 @@ A `.prophet` file is a plain zip archive:
 | `resources.json` | `[{ u: <original url>, f: <file>, m: <mime> }]`        |
 | `res/…`          | the subresource bytes                                 |
 | `snapshot.html`  | single-file snapshot (format 1 documents)             |
+| `cleanup.json`   | elements removed during capture or editing (selectors) |
 | `state.json`     | scroll position, progress, bookmarks, highlights      |
 | `cover.<ext>`    | optional cover image                                  |
 

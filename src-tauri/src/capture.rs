@@ -396,7 +396,7 @@ pub async fn capture_archive_finish(
                 author: doc.author.clone(),
                 excerpt: doc.excerpt.clone(),
                 created_at: library::now_ms(),
-                size_bytes: html.len() as u64 + st.bytes,
+                size_bytes: library::content_size(&dir),
                 cover,
                 scripts: doc.scripts,
                 format: 2,
@@ -499,6 +499,13 @@ pub fn capture_archive_commit(
     };
     let added = entries.len() as u32;
     crate::archive::write_manifest(&dir, &entries)?;
+    // Adding pages grows the document; keep the reported size honest.
+    if let Ok(raw) = std::fs::read_to_string(dir.join("meta.json")) {
+        if let Ok(mut meta) = serde_json::from_str::<library::DocMeta>(&raw) {
+            meta.size_bytes = library::content_size(&dir);
+            let _ = library::write_meta(&dir, &meta);
+        }
+    }
     crate::protocol::invalidate(&id);
     crate::sync::auto_sync(&app);
     let _ = app.emit("library://changed", ());
