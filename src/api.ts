@@ -99,6 +99,19 @@ export function iosResolveBookmark(bookmark: string): Promise<{ path: string; st
   return invoke("plugin:icloud-folder|resolve_bookmark", { bookmark });
 }
 
+/**
+ * Pulls a folder's documents down from iCloud. Files that live only in the
+ * cloud appear as hidden placeholders that ordinary directory reads skip, so
+ * without this a freshly chosen iCloud folder looks empty.
+ */
+export function iosMaterializeFolder(
+  path: string,
+  suffix = ".prophet",
+  timeoutMs = 90000,
+): Promise<{ requested: number; downloaded: number; stillPending: number }> {
+  return invoke("plugin:icloud-folder|materialize_folder", { path, suffix, timeoutMs });
+}
+
 export interface SyncReport {
   pushed: number;
   pulled: number;

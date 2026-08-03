@@ -355,6 +355,18 @@
           "markdownDescription": "Denies the list_dir command without any pre-configured scope."
         },
         {
+          "description": "Enables the materialize_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-materialize-folder",
+          "markdownDescription": "Enables the materialize_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the materialize_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-materialize-folder",
+          "markdownDescription": "Denies the materialize_folder command without any pre-configured scope."
+        },
+        {
           "description": "Enables the move_entry command without any pre-configured scope.",
           "type": "string",
           "const": "allow-move-entry",
@@ -499,10 +511,10 @@
           "markdownDescription": "Denies the write_file_bytes command without any pre-configured scope."
         },
         {
-          "description": "Default permissions: allow the full folder-bookmark demo flow (pick, resolve, list, read, write, stop).\n#### This default permission set includes:\n\n- `allow-pick-folder`\n- `allow-resolve-bookmark`\n- `allow-stop-access`\n- `allow-start-watch`\n- `allow-stop-watch`\n- `allow-reveal-in-files`\n- `allow-list-dir`\n- `allow-read-file`\n- `allow-read-file-bytes`\n- `allow-write-file`\n- `allow-write-file-bytes`\n- `allow-create-file`\n- `allow-create-dir`\n- `allow-rename-entry`\n- `allow-delete-entry`\n- `allow-move-entry`\n- `allow-copy-entry`",
+          "description": "Default permissions: allow the full folder-bookmark demo flow (pick, resolve, list, read, write, stop).\n#### This default permission set includes:\n\n- `allow-pick-folder`\n- `allow-resolve-bookmark`\n- `allow-materialize-folder`\n- `allow-stop-access`\n- `allow-start-watch`\n- `allow-stop-watch`\n- `allow-reveal-in-files`\n- `allow-list-dir`\n- `allow-read-file`\n- `allow-read-file-bytes`\n- `allow-write-file`\n- `allow-write-file-bytes`\n- `allow-create-file`\n- `allow-create-dir`\n- `allow-rename-entry`\n- `allow-delete-entry`\n- `allow-move-entry`\n- `allow-copy-entry`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Default permissions: allow the full folder-bookmark demo flow (pick, resolve, list, read, write, stop).\n#### This default permission set includes:\n\n- `allow-pick-folder`\n- `allow-resolve-bookmark`\n- `allow-stop-access`\n- `allow-start-watch`\n- `allow-stop-watch`\n- `allow-reveal-in-files`\n- `allow-list-dir`\n- `allow-read-file`\n- `allow-read-file-bytes`\n- `allow-write-file`\n- `allow-write-file-bytes`\n- `allow-create-file`\n- `allow-create-dir`\n- `allow-rename-entry`\n- `allow-delete-entry`\n- `allow-move-entry`\n- `allow-copy-entry`"
+          "markdownDescription": "Default permissions: allow the full folder-bookmark demo flow (pick, resolve, list, read, write, stop).\n#### This default permission set includes:\n\n- `allow-pick-folder`\n- `allow-resolve-bookmark`\n- `allow-materialize-folder`\n- `allow-stop-access`\n- `allow-start-watch`\n- `allow-stop-watch`\n- `allow-reveal-in-files`\n- `allow-list-dir`\n- `allow-read-file`\n- `allow-read-file-bytes`\n- `allow-write-file`\n- `allow-write-file-bytes`\n- `allow-create-file`\n- `allow-create-dir`\n- `allow-rename-entry`\n- `allow-delete-entry`\n- `allow-move-entry`\n- `allow-copy-entry`"
         },
         {
           "description": "Allow JS to present the iOS folder picker and mint a security-scoped bookmark.",
@@ -515,6 +527,12 @@
           "type": "string",
           "const": "allow-resolve-bookmark",
           "markdownDescription": "Allow JS to resolve a persisted bookmark and re-acquire security-scoped access."
+        },
+        {
+          "description": "Allow JS to pull a folder's iCloud files down so they can be read locally.",
+          "type": "string",
+          "const": "allow-materialize-folder",
+          "markdownDescription": "Allow JS to pull a folder's iCloud files down so they can be read locally."
         },
         {
           "description": "Allow JS to relinquish security-scoped access to a previously resolved folder.",

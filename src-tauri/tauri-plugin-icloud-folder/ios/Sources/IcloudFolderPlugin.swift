@@ -515,6 +515,98 @@ class IcloudFolderPlugin: Plugin, UIDocumentPickerDelegate {
   }
 }
 
+  /// Pulls every file in a folder down from iCloud.
+  ///
+  /// An iCloud folder can list entries that have no local data yet: the file
+  /// appears as a dot-prefixed `.name.ext.icloud` placeholder, which ordinary
+  /// directory reads skip. Nothing outside this plugin can materialise those,
+  /// so the app asks for a download and waits for it before syncing.
+  @objc public func materializeFolder(_ invoke: Invoke) throws {
+    struct Args: Decodable {
+      let path: String
+      let timeoutMs: Int?
+      let suffix: String?
+    }
+    let args = try invoke.parseArgs(Args.self)
+    let dir = URL(fileURLWithPath: args.path, isDirectory: true)
+    let deadline = Date().addingTimeInterval(Double(args.timeoutMs ?? 60_000) / 1000.0)
+    let wanted = (args.suffix ?? "").lowercased()
+
+    func matches(_ name: String) -> Bool {
+      if wanted.isEmpty { return true }
+      var n = name.lowercased()
+      // ".story.prophet.icloud" is a placeholder for "story.prophet"
+      if n.hasSuffix(".icloud") {
+        n = String(n.dropLast(7))
+        if n.hasPrefix(".") { n = String(n.dropFirst()) }
+      }
+      return n.hasSuffix(wanted)
+    }
+
+    let fm = FileManager.default
+    var requested = 0
+    var downloaded = 0
+    var pending: [URL] = []
+
+    do {
+      // No skipsHiddenFiles here: placeholders are hidden by definition.
+      let items = try fm.contentsOfDirectory(
+        at: dir,
+        includingPropertiesForKeys: [.ubiquitousItemDownloadingStatusKey, .isDirectoryKey],
+        options: [])
+      for item in items {
+        guard matches(item.lastPathComponent) else { continue }
+        let isDir =
+          (try? item.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+        if isDir { continue }
+        let status = (try? item.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey]))?
+          .ubiquitousItemDownloadingStatus
+        if status == .current {
+          downloaded += 1
+          continue
+        }
+        // A placeholder's real name is the path minus the dot and suffix.
+        var target = item
+        let name = item.lastPathComponent
+        if name.hasSuffix(".icloud") && name.hasPrefix(".") {
+          let real = String(name.dropFirst().dropLast(7))
+          target = dir.appendingPathComponent(real)
+        }
+        do {
+          try fm.startDownloadingUbiquitousItem(at: target)
+          requested += 1
+          pending.append(target)
+        } catch {
+          // Not an iCloud item, or already local under another name.
+        }
+      }
+    } catch {
+      invoke.reject("materializeFolder failed: \(error.localizedDescription)")
+      return
+    }
+
+    // Wait for the downloads we asked for, so the caller can read the files
+    // immediately afterwards.
+    while !pending.isEmpty && Date() < deadline {
+      Thread.sleep(forTimeInterval: 0.25)
+      pending = pending.filter { url in
+        let status = (try? url.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey]))?
+          .ubiquitousItemDownloadingStatus
+        if status == .current || fm.fileExists(atPath: url.path) {
+          downloaded += 1
+          return false
+        }
+        return true
+      }
+    }
+
+    invoke.resolve([
+      "requested": requested,
+      "downloaded": downloaded,
+      "stillPending": pending.count,
+    ])
+  }
+
 @_cdecl("init_plugin_icloud_folder")
 func initPlugin() -> Plugin {
   return IcloudFolderPlugin()

@@ -91,6 +91,80 @@ fn local_stamp(dir: &Path) -> u64 {
         .unwrap_or(0)
 }
 
+/// A filename a person can recognise. The document id lives inside the
+/// archive, so the name is free to be readable.
+fn file_name_for(meta: &library::DocMeta) -> String {
+    let mut slug: String = meta
+        .title
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => ' ',
+            c if c.is_control() => ' ',
+            c => c,
+        })
+        .collect();
+    slug = slug.split_whitespace().collect::<Vec<_>>().join(" ");
+    if slug.len() > 70 {
+        slug = slug.chars().take(70).collect::<String>().trim_end().to_string();
+    }
+    if slug.is_empty() || slug.starts_with('.') {
+        slug = format!("Document {}", &meta.id[..8.min(meta.id.len())]);
+    }
+    format!("{slug}.prophet")
+}
+
+/// Everything the sync folder currently holds, identified by the document id
+/// stored inside each archive.
+struct FolderEntry {
+    path: PathBuf,
+    id: Option<String>,
+    source_url: Option<String>,
+}
+
+fn scan_folder(folder: &Path) -> Vec<FolderEntry> {
+    let mut out = Vec::new();
+    let Ok(entries) = fs::read_dir(folder) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let ext = path
+            .extension()
+            .map(|e| e.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        if ext == "prophet" {
+            let meta = crate::transfer::read_meta_from_archive(&path);
+            out.push(FolderEntry {
+                id: meta.as_ref().map(|m| m.id.clone()),
+                source_url: meta.map(|m| m.source_url),
+                path,
+            });
+        } else if ext == "webarchive" {
+            out.push(FolderEntry { path, id: None, source_url: None });
+        }
+    }
+    out
+}
+
+/// Picks a name that isn't already taken by a *different* document.
+fn unique_path(folder: &Path, desired: &str, taken: &[PathBuf]) -> PathBuf {
+    let candidate = folder.join(desired);
+    if !taken.contains(&candidate) && !candidate.exists() {
+        return candidate;
+    }
+    let stem = desired.trim_end_matches(".prophet");
+    for n in 2..100 {
+        let next = folder.join(format!("{stem} ({n}).prophet"));
+        if !taken.contains(&next) && !next.exists() {
+            return next;
+        }
+    }
+    folder.join(desired)
+}
+
 // ---- state merging --------------------------------------------------------
 
 fn array_of<'a>(v: &'a Value, key: &str) -> &'a [Value] {
@@ -272,58 +346,74 @@ pub fn run_sync(app: &AppHandle, folder: &Path) -> Result<SyncReport, String> {
     library::ensure_library_dir(app)?;
     let root = library::library_root(app)?;
 
-    // --- pull: anything in the folder we don't have, or that changed there
-    if let Ok(entries) = fs::read_dir(folder) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-            let is_doc = path
-                .extension()
-                .map(|e| e.eq_ignore_ascii_case("prophet") || e.eq_ignore_ascii_case("webarchive"))
-                .unwrap_or(false);
-            if !is_doc {
-                continue;
-            }
-            let stem = path
-                .file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let local_dir = root.join(&stem);
-            let known = library::valid_id(&stem) && local_dir.exists();
-            if known {
-                // Same document on both sides: merge annotations.
-                match crate::transfer::read_state_from_archive(&path) {
+    let root_docs: Vec<String> = fs::read_dir(&root)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|e| e.path().is_dir() && e.path().join("meta.json").exists())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|id| library::valid_id(id))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let folder_entries = scan_folder(folder);
+
+    // --- pull: anything in the folder this device doesn't have yet
+    for entry in &folder_entries {
+        match &entry.id {
+            // A .prophet we can identify.
+            Some(id) if root_docs.contains(id) => {
+                let local_dir = root.join(id);
+                match crate::transfer::read_state_from_archive(&entry.path) {
                     Ok(Some(remote_state)) => {
                         let local_state = read_state(&local_dir);
                         let merged = merge_state(&local_state, &remote_state);
                         if merged != local_state {
                             let raw = serde_json::to_string(&merged).map_err(|e| e.to_string())?;
                             if let Err(e) = fs::write(local_dir.join("state.json"), raw) {
-                                report.errors.push(format!("{stem}: {e}"));
+                                report.errors.push(format!("{id}: {e}"));
                             } else {
                                 report.merged += 1;
                             }
                         }
                     }
                     Ok(None) => {}
-                    Err(e) => report.errors.push(format!("{stem}: {e}")),
+                    Err(e) => report.errors.push(format!("{id}: {e}")),
                 }
-                continue;
             }
-            // New to this device.
-            match crate::transfer::import_from_path(app, &path) {
-                Ok(_) => report.pulled += 1,
-                Err(e) => report
-                    .errors
-                    .push(format!("{}: {e}", path.file_name().unwrap_or_default().to_string_lossy())),
+            _ => {
+                // A .webarchive already imported once shouldn't come back on
+                // every sync, so skip one whose source we already hold.
+                if entry.id.is_none() {
+                    let name = entry.path.file_name().unwrap_or_default().to_string_lossy();
+                    if !name.to_lowercase().ends_with(".webarchive") {
+                        continue;
+                    }
+                }
+                if let Some(url) = &entry.source_url {
+                    if root_docs.iter().any(|id| {
+                        library::summary_for(&root.join(id))
+                            .map(|s| &s.meta.source_url == url)
+                            .unwrap_or(false)
+                    }) {
+                        continue;
+                    }
+                }
+                match crate::transfer::import_from_path(app, &entry.path) {
+                    Ok(_) => report.pulled += 1,
+                    Err(e) => report.errors.push(format!(
+                        "{}: {e}",
+                        entry.path.file_name().unwrap_or_default().to_string_lossy()
+                    )),
+                }
             }
         }
     }
 
-    // --- push: everything in the library, when the folder copy is stale
+    // --- push: mirror the library out, under readable names
     let entries = fs::read_dir(&root).map_err(|e| format!("could not read library: {e}"))?;
+    let mut written: Vec<PathBuf> = folder_entries.iter().map(|e| e.path.clone()).collect();
     for entry in entries.flatten() {
         let dir = entry.path();
         if !dir.is_dir() || !dir.join("meta.json").exists() {
@@ -333,7 +423,41 @@ pub fn run_sync(app: &AppHandle, folder: &Path) -> Result<SyncReport, String> {
         if !library::valid_id(&id) {
             continue;
         }
-        let dest = folder.join(format!("{id}.prophet"));
+        let Ok(summary) = library::summary_for(&dir) else {
+            continue;
+        };
+        let desired = file_name_for(&summary.meta);
+
+        // Find this document's existing file by id, wherever it sits.
+        let existing = folder_entries
+            .iter()
+            .find(|e| e.id.as_deref() == Some(id.as_str()))
+            .map(|e| e.path.clone());
+
+        let dest = match existing {
+            Some(p) => {
+                // The title may have changed since it was last written.
+                if p.file_name().map(|n| n.to_string_lossy().into_owned())
+                    != Some(desired.clone())
+                {
+                    let renamed = unique_path(folder, &desired, &written);
+                    if fs::rename(&p, &renamed).is_ok() {
+                        written.push(renamed.clone());
+                        renamed
+                    } else {
+                        p
+                    }
+                } else {
+                    p
+                }
+            }
+            None => {
+                let fresh = unique_path(folder, &desired, &written);
+                written.push(fresh.clone());
+                fresh
+            }
+        };
+
         let local = local_stamp(&dir);
         // A one-second grace avoids re-pushing on filesystems with coarse
         // timestamps, and the merge step above may have just touched state.
@@ -357,6 +481,50 @@ mod tests {
 
     fn hl(id: &str, at: u64, color: &str) -> Value {
         json!({ "id": id, "exact": format!("quote {id}"), "color": color, "createdAt": at })
+    }
+
+    fn meta_named(title: &str) -> library::DocMeta {
+        library::DocMeta {
+            id: "0f8a1c22-1111-2222-3333-444455556666".into(),
+            title: title.into(),
+            source_url: "https://example.com/x".into(),
+            author: None,
+            excerpt: None,
+            created_at: 0,
+            size_bytes: 0,
+            cover: None,
+            scripts: true,
+            format: 2,
+        }
+    }
+
+    #[test]
+    fn sync_files_are_named_after_the_document() {
+        assert_eq!(file_name_for(&meta_named("The Elevator Story")), "The Elevator Story.prophet");
+    }
+
+    #[test]
+    fn sync_file_names_stay_filesystem_safe() {
+        let name = file_name_for(&meta_named("Bad/Name: \"quoted\" <tag>|pipe?"));
+        for bad in ['/', '\\', ':', '*', '?', '"', '<', '>', '|'] {
+            assert!(!name.contains(bad), "{name} still contains {bad}");
+        }
+        assert!(name.ends_with(".prophet"));
+    }
+
+    #[test]
+    fn very_long_titles_are_trimmed_but_still_readable() {
+        let name = file_name_for(&meta_named(&"word ".repeat(60)));
+        assert!(name.len() < 90, "too long: {} chars", name.len());
+        assert!(name.starts_with("word"));
+    }
+
+    #[test]
+    fn an_empty_title_still_produces_a_usable_name() {
+        let name = file_name_for(&meta_named("   "));
+        assert!(name.starts_with("Document "), "{name}");
+        assert!(name.ends_with(".prophet"));
+        assert!(!name.starts_with('.'));
     }
 
     #[test]

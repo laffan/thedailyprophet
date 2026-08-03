@@ -11,6 +11,11 @@ description = "Allow JS to resolve a persisted bookmark and re-acquire security-
 commands.allow = ["resolve_bookmark"]
 
 [[permission]]
+identifier = "allow-materialize-folder"
+description = "Allow JS to pull a folder's iCloud files down so they can be read locally."
+commands.allow = ["materialize_folder"]
+
+[[permission]]
 identifier = "allow-stop-access"
 description = "Allow JS to relinquish security-scoped access to a previously resolved folder."
 commands.allow = ["stop_access"]
@@ -90,6 +95,7 @@ description = "Default permissions: allow the full folder-bookmark demo flow (pi
 permissions = [
   "allow-pick-folder",
   "allow-resolve-bookmark",
+  "allow-materialize-folder",
   "allow-stop-access",
   "allow-start-watch",
   "allow-stop-watch",

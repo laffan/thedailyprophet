@@ -6,6 +6,7 @@ Default permissions: allow the full folder-bookmark demo flow (pick, resolve, li
 
 - `allow-pick-folder`
 - `allow-resolve-bookmark`
+- `allow-materialize-folder`
 - `allow-stop-access`
 - `allow-start-watch`
 - `allow-stop-watch`
@@ -157,6 +158,32 @@ Enables the list_dir command without any pre-configured scope.
 <td>
 
 Denies the list_dir command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`icloud-folder:allow-materialize-folder`
+
+</td>
+<td>
+
+Enables the materialize_folder command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`icloud-folder:deny-materialize-folder`
+
+</td>
+<td>
+
+Denies the materialize_folder command without any pre-configured scope.
 
 </td>
 </tr>
@@ -495,6 +522,19 @@ Allow JS to present the iOS folder picker and mint a security-scoped bookmark.
 <td>
 
 Allow JS to resolve a persisted bookmark and re-acquire security-scoped access.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`icloud-folder:allow-materialize-folder`
+
+</td>
+<td>
+
+Allow JS to pull a folder's iCloud files down so they can be read locally.
 
 </td>
 </tr>

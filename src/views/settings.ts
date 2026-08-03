@@ -7,6 +7,7 @@ import {
   appPlatform,
   iosPickFolder,
   iosResolveBookmark,
+  iosMaterializeFolder,
   type Settings,
 } from "../api";
 import { el, toast, fmtDate } from "../util";
@@ -98,6 +99,30 @@ export function mountSettings(root: HTMLElement, ctx: AppContext): () => void {
     }
   }
 
+  /**
+   * iCloud keeps files in the cloud until something asks for them, and a
+   * placeholder is hidden from ordinary directory reads — so a folder full
+   * of documents can look empty. Ask for them before syncing.
+   */
+  async function downloadFromCloud(): Promise<void> {
+    if (!isMobile() || !settings.syncFolder) return;
+    try {
+      const r = await iosMaterializeFolder(settings.syncFolder);
+      if (r.requested > 0) {
+        toast(`Downloading ${r.requested} document${r.requested === 1 ? "" : "s"} from iCloud…`);
+      }
+      if (r.stillPending > 0) {
+        toast(
+          `${r.stillPending} document${r.stillPending === 1 ? " is" : "s are"} still downloading — sync again shortly`,
+          "error",
+        );
+      }
+    } catch (e) {
+      // Not fatal: a non-iCloud folder simply has nothing to fetch.
+      console.warn("iCloud download skipped", e);
+    }
+  }
+
   /** The explicit fallback on iPadOS — chosen deliberately, never automatic. */
   async function useAppFolder(): Promise<void> {
     const ok = await confirmModal({
@@ -122,6 +147,7 @@ export function mountSettings(root: HTMLElement, ctx: AppContext): () => void {
     render();
     try {
       await ensureAccess();
+      await downloadFromCloud();
       const r = await syncNow();
       const parts: string[] = [];
       if (r.pulled) parts.push(`${r.pulled} added`);

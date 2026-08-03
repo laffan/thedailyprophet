@@ -337,3 +337,15 @@ pub fn read_state_from_archive(path: &Path) -> Result<Option<serde_json::Value>,
         .ok()
         .filter(|v| v.is_object()))
 }
+
+
+/// Reads only `meta.json` out of a `.prophet` archive, so folder sync can
+/// identify a document without unpacking it (and without relying on the
+/// file name, which is chosen for humans, not for matching).
+pub fn read_meta_from_archive(path: &Path) -> Option<library::DocMeta> {
+    let file = File::open(path).ok()?;
+    let mut zip = ZipArchive::new(file).ok()?;
+    let mut raw = String::new();
+    zip.by_name("meta.json").ok()?.read_to_string(&mut raw).ok()?;
+    serde_json::from_str(&raw).ok()
+}

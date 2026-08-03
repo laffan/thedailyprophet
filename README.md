@@ -75,7 +75,10 @@ Built on [Tauri 2.0](https://v2.tauri.app).
   new found there is copied in, and reading state is *merged*: highlights and
   bookmarks are unioned by id and the more recently read device wins the
   scroll position, so annotating on two devices never loses one side's work.
-  Optionally runs automatically after each capture or import.
+  Optionally runs automatically after each capture or import. Files in the
+  folder are named after the document (`The Elevator Story.prophet`), and are
+  matched by the id stored inside each archive rather than by filename — so
+  renaming a document renames its file without breaking the pairing.
 - **Annotation export** — save a document's highlights and bookmarks as
   Markdown, JSON, CSV or plain text, from the shelf's ⋯ menu or the reader.
   The reader's sidebar doubles as an annotation browser: highlights are
@@ -135,6 +138,12 @@ that bookmark to re-acquire access before each sync (and updates the path if
 iCloud has moved the folder). This is handled by the bundled
 `src-tauri/tauri-plugin-icloud-folder` plugin, adapted from the working
 implementation in [laffan/hush](https://github.com/laffan/hush).
+
+iCloud also keeps files in the cloud until something asks for them, and an
+undownloaded file is a *hidden* placeholder that ordinary directory reads
+skip — which makes a folder full of documents look empty. Before each sync
+the app asks iCloud to download the folder's `.prophet` files and waits for
+them, reporting anything still in flight.
 
 For the app's own folder to be visible in the Files app, add these to the
 generated `Info.plist` after `tauri ios init`:

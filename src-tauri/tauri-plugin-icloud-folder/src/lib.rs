@@ -162,6 +162,48 @@ async fn resolve_bookmark<R: Runtime>(
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterializeArgs {
+    pub path: String,
+    pub timeout_ms: Option<u32>,
+    pub suffix: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterializeResult {
+    pub requested: u32,
+    pub downloaded: u32,
+    pub still_pending: u32,
+}
+
+/// Ask iCloud to download every matching file in a folder, and wait for it.
+#[tauri::command]
+async fn materialize_folder<R: Runtime>(
+    app: AppHandle<R>,
+    path: String,
+    timeout_ms: Option<u32>,
+    suffix: Option<String>,
+) -> Result<MaterializeResult, String> {
+    #[cfg(target_os = "ios")]
+    {
+        let plugin = app.state::<IcloudFolder<R>>();
+        let handle = plugin.0.as_ref().ok_or("plugin not initialised")?;
+        handle
+            .run_mobile_plugin::<MaterializeResult>(
+                "materializeFolder",
+                MaterializeArgs { path, timeout_ms, suffix },
+            )
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        let _ = (app, path, timeout_ms, suffix);
+        Err(IOS_ONLY.into())
+    }
+}
+
 #[tauri::command]
 async fn stop_access<R: Runtime>(app: AppHandle<R>, path: String) -> Result<(), String> {
     #[cfg(target_os = "ios")]
@@ -460,6 +502,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
         .invoke_handler(tauri::generate_handler![
             pick_folder,
             resolve_bookmark,
+            materialize_folder,
             stop_access,
             start_watch,
             stop_watch,
