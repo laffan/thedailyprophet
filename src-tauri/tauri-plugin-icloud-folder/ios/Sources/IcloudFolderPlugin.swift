@@ -513,7 +513,6 @@ class IcloudFolderPlugin: Plugin, UIDocumentPickerDelegate {
     }
     return url
   }
-}
 
   /// Pulls every file in a folder down from iCloud.
   ///
@@ -606,6 +605,7 @@ class IcloudFolderPlugin: Plugin, UIDocumentPickerDelegate {
       "stillPending": pending.count,
     ])
   }
+}
 
 @_cdecl("init_plugin_icloud_folder")
 func initPlugin() -> Plugin {
