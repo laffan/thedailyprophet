@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-notebook-save-doc"
+description = "Enables the notebook_save_doc command without any pre-configured scope."
+commands.allow = ["notebook_save_doc"]
+
+[[permission]]
+identifier = "deny-notebook-save-doc"
+description = "Denies the notebook_save_doc command without any pre-configured scope."
+commands.deny = ["notebook_save_doc"]

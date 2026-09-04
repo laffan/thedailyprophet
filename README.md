@@ -82,16 +82,41 @@ Built on [Tauri 2.0](https://v2.tauri.app).
   Reading state is kept *out* of the archive, in a small per-document file
   under `Reading state/` — so annotating a 30 MB document uploads a few
   hundred bytes, and the archive itself is only republished when its content
-  actually changes (a capture, an edit, added pages).
+  actually changes (a capture, an edit, added pages). The notebook travels
+  the same folder as a single `Notebook.dailyprophet` file, merged entry by
+  entry: whichever device edited an entry last wins it, and a deletion is
+  remembered as a tombstone so it sticks instead of returning on the next
+  pass.
+- **Reading notebook** — one notebook for the whole library, in a
+  toggle-able sidebar in the reader, divided into a collapsible section per
+  document. It holds four kinds of thing:
+  - **Highlights** — everything you have highlighted, listed where it falls
+    in the text, each with room for a note.
+  - **Bookmarks** — a coloured arrow in the page's left margin that can be
+    dragged to move the place it marks (its label follows the heading it
+    lands under), plus a card for its note and colour.
+  - **Snapshots** — the cursor becomes a crosshair and you drag a rectangle
+    over the page to keep a PNG of it, note and all. The region is redrawn
+    from its own computed styles with images and fonts inlined, so a
+    snapshot looks like what was on screen.
+  - **Notes** — plain markdown cards, in any colour, dragged wherever you
+    want them: between two highlights, or into another document's section.
+
+  Notes are edited as markdown *in place* — headings grow, emphasis leans,
+  links and code change colour as you type — using CodeMirror, which is
+  loaded the first time a note appears rather than at launch.
+
+  Highlights, bookmarks and snapshots sit in the order they occur in the
+  text, and clicking one scrolls there; clicking one in another document's
+  section opens that document at the right place.
 - **Annotation export** — save a document's highlights and bookmarks as
   Markdown, JSON, CSV or plain text, from the shelf's ⋯ menu or the reader.
-  The reader's sidebar doubles as an annotation browser: highlights are
-  listed in document order, grouped by page for multi-page documents, and
-  can be exported or copied as Markdown from there.
 - **Portable documents** — export any story as a `.prophet` file and open it
   in another instance of the app, bookmarks and highlights included. The
   app registers the `.prophet` file association; double-click or drag onto
-  the window to import.
+  the window to import. A notebook exports the same way, as
+  `Notebook.dailyprophet`; opening one merges it into the notebook already
+  here rather than replacing it.
 
 ## Development
 
@@ -242,6 +267,28 @@ this layout — the two formats express the same idea.
 Imports keep the original document id when it's free, so passing a document
 between machines is stable; otherwise a fresh id is minted.
 
+## The `Notebook.dailyprophet` format
+
+The notebook is a zipped folder of documents — one file per document, so
+adding a note rewrites a few hundred bytes rather than the whole notebook:
+
+| entry                     | contents                                            |
+| ------------------------- | --------------------------------------------------- |
+| `notebook.json`           | format marker `{ "format": "notebook", "version": 1 }` |
+| `documents/<doc-id>.json` | that document's title, section state and entries    |
+| `snapshots/<entry-id>.png`| the snapshot images                                 |
+
+It lives unzipped in the app's data directory in exactly that layout, and is
+zipped into the sync folder under one name for the whole library.
+
+An entry carries its `id`, `kind`, `updatedAt` and the markdown of its note.
+Highlights and bookmarks keep the id they already have in the document's
+reading state, which stays the anchor of record — the notebook carries their
+note, their colour and a copy of their text, so a notebook file still reads
+on its own. Merging is per entry, newest edit wins, and a deleted entry is
+kept as a tombstone (for six months) so the deletion propagates instead of
+the entry returning from another device.
+
 ## Known limitations (v1)
 
 - Capture is desktop-only; iPadOS reads, imports and syncs. This is a gap
@@ -259,10 +306,17 @@ between machines is stable; otherwise a fresh id is minted.
   the document CSP (usually a font or analytics beacon, so it degrades
   gracefully).
 - Archives are capped at 512 MB, and at most 60 included pages per document.
-- Sync merges annotations by union, so deleting a highlight on one device
-  does not delete it on the others — it returns on the next sync. Sync is
-  also a folder mirror, not a live watcher: it runs when you press **Sync
-  now**, or after a capture/import when automatic sync is on.
+- Sync is a folder mirror, not a live watcher: it runs when you press **Sync
+  now**, or after a capture/import when automatic sync is on. Deleting a
+  highlight or bookmark now propagates, because the notebook keeps a
+  tombstone for it and reconciles reading state against that on open.
+- A snapshot is a redrawing of the region, not a photograph of it:
+  `::before`/`::after` content, live `<video>`, and cross-origin resources
+  the archive never captured are missing from it, and a very large region is
+  refused rather than rendered slowly.
+- Deleting a document from the shelf leaves its notebook section behind —
+  notes about something you have put away are the point of a notebook — but
+  its highlights and bookmarks can no longer be scrolled to.
 - Included pages are loaded in a hidden frame and scrolled, but only assets
   the page requests on its own are captured. Something that loads solely in
   response to an interaction nobody performed (a sound tied to one button,
@@ -270,9 +324,7 @@ between machines is stable; otherwise a fresh id is minted.
 
 ## Roadmap ideas
 
-- Full-text search across the shelf
-- Notes on highlights
+- Full-text search across the shelf — and across the notebook
 - Reader themes (typography override for non-interactive captures)
 - Capture on iPadOS — specced in [WEBVIEW_SHIM.md](WEBVIEW_SHIM.md)
-- Deleting an annotation on one device propagating to the others (sync
-  currently unions, so a deletion returns on the next pass)
+- Exporting the notebook as Markdown, snapshots and all

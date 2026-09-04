@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-notebook-import"
+description = "Enables the notebook_import command without any pre-configured scope."
+commands.allow = ["notebook_import"]
+
+[[permission]]
+identifier = "deny-notebook-import"
+description = "Denies the notebook_import command without any pre-configured scope."
+commands.deny = ["notebook_import"]

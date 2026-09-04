@@ -45,6 +45,13 @@
         "role": "Editor"
       },
       {
+        "ext": ["dailyprophet"],
+        "name": "Daily Prophet Notebook",
+        "description": "A reading notebook from The Daily Prophet",
+        "mimeType": "application/x-dailyprophet-notebook",
+        "role": "Editor"
+      },
+      {
         "ext": ["webarchive"],
         "name": "Web Archive",
         "description": "A Safari web archive",

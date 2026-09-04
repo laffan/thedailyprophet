@@ -821,6 +821,588 @@
     }
   }
 
+  /* ---- notebook: bookmark markers ---------------------------------------
+     A bookmark is a coloured arrow in the left margin of the page, dragged
+     to move the place it marks. The markers live in a fixed overlay and are
+     re-laid-out on scroll, so they work whether the document scrolls or some
+     container inside it does. */
+
+  var MARKERS = { layer: null, items: [], dragging: null };
+
+  /** A rectangle's position in document coordinates. */
+  function docYOf(viewportTop) {
+    var r = scrollRoot || document.scrollingElement || document.documentElement;
+    if (rootIsDocument) return viewportTop + r.scrollTop;
+    var rr = r.getBoundingClientRect();
+    return viewportTop - rr.top + r.scrollTop;
+  }
+
+  /** The inverse: where a document position currently sits on screen. */
+  function viewportYOf(docY) {
+    var r = scrollRoot || document.scrollingElement || document.documentElement;
+    if (rootIsDocument) return docY - r.scrollTop;
+    return docY - r.scrollTop + r.getBoundingClientRect().top;
+  }
+
+  /** Where a stored anchor points now, allowing for a document that grew. */
+  function anchorY(item) {
+    var m = metrics();
+    var max = Math.max(0, m.docHeight - m.viewport);
+    if (item.docHeight && Math.abs(m.docHeight - item.docHeight) > item.docHeight * 0.02) {
+      return (item.ratio || 0) * max;
+    }
+    return typeof item.y === "number" ? item.y : (item.ratio || 0) * max;
+  }
+
+  function markerLayer() {
+    if (MARKERS.layer && MARKERS.layer.isConnected) return MARKERS.layer;
+    var layer = document.createElement("div");
+    layer.setAttribute("data-prophet-bookmarks", "1");
+    layer.style.cssText =
+      "position:fixed;left:0;top:0;right:0;bottom:0;pointer-events:none;" +
+      "z-index:2147483000;";
+    (document.body || document.documentElement).appendChild(layer);
+    MARKERS.layer = layer;
+    return layer;
+  }
+
+  function buildMarker(item) {
+    var wrap = document.createElement("div");
+    wrap.setAttribute("data-prophet-bm", item.id);
+    wrap.style.cssText =
+      "position:absolute;left:0;top:0;height:0;pointer-events:none;will-change:transform;";
+    var grip = document.createElement("div");
+    grip.style.cssText =
+      "position:absolute;left:0;top:-9px;height:18px;display:flex;align-items:center;" +
+      "pointer-events:auto;cursor:grab;touch-action:none;padding-right:10px;";
+    var line = document.createElement("div");
+    line.style.cssText = "height:2px;width:54px;transition:width .12s ease;";
+    var head = document.createElement("div");
+    head.style.cssText =
+      "width:0;height:0;border-top:6px solid transparent;border-bottom:6px solid transparent;";
+    grip.appendChild(line);
+    grip.appendChild(head);
+    wrap.appendChild(grip);
+    wrap._line = line;
+    wrap._head = head;
+    grip.addEventListener("mouseenter", function () { line.style.width = "96px"; });
+    grip.addEventListener("mouseleave", function () {
+      if (!MARKERS.dragging) line.style.width = "54px";
+    });
+    grip.addEventListener("pointerdown", function (e) { beginMarkerDrag(e, item.id); });
+    return wrap;
+  }
+
+  function paintMarker(wrap, item) {
+    var color = item.color || "#b8362a";
+    wrap._line.style.background = color;
+    wrap._head.style.borderLeft = "10px solid " + color;
+    wrap.title = item.label || "Bookmark";
+  }
+
+  function setMarkers(list) {
+    var layer = markerLayer();
+    var wanted = {};
+    for (var i = 0; i < list.length; i++) wanted[list[i].id] = true;
+    var existing = layer.querySelectorAll("[data-prophet-bm]");
+    for (var j = 0; j < existing.length; j++) {
+      if (!wanted[existing[j].getAttribute("data-prophet-bm")]) existing[j].remove();
+    }
+    MARKERS.items = list.slice();
+    for (var k = 0; k < list.length; k++) {
+      var item = list[k];
+      var wrap = layer.querySelector('[data-prophet-bm="' + cssEscape(item.id) + '"]');
+      if (!wrap) {
+        wrap = buildMarker(item);
+        layer.appendChild(wrap);
+      }
+      paintMarker(wrap, item);
+    }
+    layoutMarkers();
+  }
+
+  function layoutMarkers() {
+    if (!MARKERS.layer || !MARKERS.items.length) return;
+    var height = window.innerHeight;
+    for (var i = 0; i < MARKERS.items.length; i++) {
+      var item = MARKERS.items[i];
+      var wrap = MARKERS.layer.querySelector('[data-prophet-bm="' + cssEscape(item.id) + '"]');
+      if (!wrap) continue;
+      if (MARKERS.dragging && MARKERS.dragging.id === item.id) continue;
+      var vy = viewportYOf(anchorY(item));
+      if (vy < -24 || vy > height + 24) {
+        wrap.style.display = "none";
+      } else {
+        wrap.style.display = "block";
+        wrap.style.transform = "translateY(" + Math.round(vy) + "px)";
+      }
+    }
+  }
+
+  function beginMarkerDrag(e, id) {
+    var wrap = MARKERS.layer && MARKERS.layer.querySelector('[data-prophet-bm="' + cssEscape(id) + '"]');
+    if (!wrap) return;
+    e.preventDefault();
+    var moved = false;
+    var startY = e.clientY;
+    var drag = { id: id, y: e.clientY };
+    MARKERS.dragging = drag;
+    try { e.target.setPointerCapture(e.pointerId); } catch (err) {}
+    wrap.style.cursor = "grabbing";
+
+    function onMove(ev) {
+      if (Math.abs(ev.clientY - startY) > 3) moved = true;
+      drag.y = Math.max(0, Math.min(window.innerHeight, ev.clientY));
+      wrap.style.transform = "translateY(" + Math.round(drag.y) + "px)";
+    }
+    function onUp() {
+      document.removeEventListener("pointermove", onMove, true);
+      document.removeEventListener("pointerup", onUp, true);
+      document.removeEventListener("pointercancel", onUp, true);
+      MARKERS.dragging = null;
+      wrap.style.cursor = "grab";
+      if (!moved) {
+        send("bookmark-activated", { id: id });
+        layoutMarkers();
+        return;
+      }
+      var m = metrics();
+      var y = docYOf(drag.y);
+      var max = Math.max(1, m.docHeight - m.viewport);
+      var item = null;
+      for (var i = 0; i < MARKERS.items.length; i++) {
+        if (MARKERS.items[i].id === id) item = MARKERS.items[i];
+      }
+      if (item) {
+        item.y = y;
+        item.ratio = Math.min(1, Math.max(0, y / max));
+        item.docHeight = m.docHeight;
+        item.label = snippetAt(drag.y);
+      }
+      send("bookmark-moved", {
+        id: id,
+        y: y,
+        ratio: item ? item.ratio : 0,
+        docHeight: m.docHeight,
+        label: item ? item.label : "",
+      });
+      layoutMarkers();
+    }
+    document.addEventListener("pointermove", onMove, true);
+    document.addEventListener("pointerup", onUp, true);
+    document.addEventListener("pointercancel", onUp, true);
+  }
+
+  /** The heading a given point on screen sits under, for a bookmark's label. */
+  function snippetAt(viewportY) {
+    var headings = document.querySelectorAll("h1, h2, h3, h4");
+    var best = null;
+    for (var i = 0; i < headings.length; i++) {
+      var rect = headings[i].getBoundingClientRect();
+      if (rect.top <= viewportY) best = headings[i];
+      else break;
+    }
+    var text = best ? best.textContent : "";
+    if (!text || !text.trim()) return contextSnippet();
+    return normalizeQuote(text).slice(0, 80);
+  }
+
+  /** Where every highlight currently sits, so the notebook can order them. */
+  function highlightPositions() {
+    var out = {};
+    var m = metrics();
+    var max = Math.max(1, m.docHeight - m.viewport);
+    var marks = document.querySelectorAll("mark[data-prophet-hl]");
+    for (var i = 0; i < marks.length; i++) {
+      var id = marks[i].getAttribute("data-prophet-hl");
+      if (out[id]) continue;
+      var rect = marks[i].getBoundingClientRect();
+      var y = docYOf(rect.top);
+      out[id] = {
+        y: y,
+        ratio: Math.min(1, Math.max(0, y / max)),
+        docHeight: m.docHeight,
+      };
+    }
+    return out;
+  }
+
+  /* ---- notebook: snapshots ----------------------------------------------
+     Drag a rectangle over the page and get a PNG of it. Nothing can ask a
+     webview to photograph part of itself, so the region is redrawn: the
+     smallest element containing it is cloned with its computed styles, the
+     images, canvases and fonts it needs are inlined as data URIs (an SVG
+     image may not reach outside itself), and the clone is rasterised through
+     <foreignObject> and cropped to the rectangle. */
+
+  var SNAP = { on: false, overlay: null, band: null, start: null, style: null };
+
+  /* Copied per node. Computed values pin the layout exactly, which is what
+     lets the clone be lifted out of its ancestors and still lay out the
+     same. Longhands only — shorthands are not reported reliably. */
+  var SNAP_PROPS = (
+    "font-family font-size font-weight font-style font-variant font-feature-settings " +
+    "line-height letter-spacing word-spacing text-align text-decoration-line " +
+    "text-decoration-color text-decoration-style text-transform text-indent " +
+    "text-shadow white-space word-break overflow-wrap hyphens direction " +
+    "color background-color background-image background-position background-size " +
+    "background-repeat background-clip background-origin opacity visibility " +
+    "display position top right bottom left float clear z-index " +
+    "width height min-width min-height max-width max-height box-sizing " +
+    "margin-top margin-right margin-bottom margin-left " +
+    "padding-top padding-right padding-bottom padding-left " +
+    "border-top-width border-right-width border-bottom-width border-left-width " +
+    "border-top-style border-right-style border-bottom-style border-left-style " +
+    "border-top-color border-right-color border-bottom-color border-left-color " +
+    "border-top-left-radius border-top-right-radius border-bottom-left-radius " +
+    "border-bottom-right-radius box-shadow outline-width outline-style outline-color " +
+    "flex-direction flex-wrap justify-content align-items align-content align-self " +
+    "flex-grow flex-shrink flex-basis order row-gap column-gap " +
+    "grid-template-columns grid-template-rows grid-column-start grid-column-end " +
+    "grid-row-start grid-row-end grid-auto-flow " +
+    "list-style-type list-style-position table-layout border-collapse border-spacing " +
+    "vertical-align transform transform-origin overflow-x overflow-y object-fit"
+  ).split(" ");
+
+  var SNAP_SKIP = {
+    SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEMPLATE: 1, LINK: 1, META: 1,
+    IFRAME: 1, OBJECT: 1, EMBED: 1, VIDEO: 1, AUDIO: 1,
+  };
+  var SNAP_MAX_NODES = 4000;
+  var SNAP_MAX_ASSET_BYTES = 6 * 1024 * 1024;
+  var snapAssets = new Map();
+  var snapAssetBytes = 0;
+
+  function snapshotBegin() {
+    if (SNAP.on) return;
+    SNAP.on = true;
+    var style = document.createElement("style");
+    style.setAttribute("data-prophet-snap", "1");
+    style.textContent = "*{cursor:crosshair !important;}";
+    (document.head || document.documentElement).appendChild(style);
+    SNAP.style = style;
+
+    var overlay = document.createElement("div");
+    overlay.style.cssText =
+      "position:fixed;left:0;top:0;right:0;bottom:0;z-index:2147483600;" +
+      "cursor:crosshair;background:rgba(20,16,8,0.06);touch-action:none;";
+    var band = document.createElement("div");
+    band.style.cssText =
+      "position:absolute;border:1.5px dashed #b8362a;background:rgba(184,54,42,0.10);" +
+      "display:none;pointer-events:none;";
+    overlay.appendChild(band);
+    (document.body || document.documentElement).appendChild(overlay);
+    SNAP.overlay = overlay;
+    SNAP.band = band;
+
+    overlay.addEventListener("pointerdown", onSnapDown);
+    document.addEventListener("keydown", onSnapKey, true);
+    send("snapshot-armed", {});
+  }
+
+  function snapshotEnd(reason) {
+    if (!SNAP.on) return;
+    SNAP.on = false;
+    document.removeEventListener("keydown", onSnapKey, true);
+    if (SNAP.overlay) SNAP.overlay.remove();
+    if (SNAP.style) SNAP.style.remove();
+    SNAP.overlay = SNAP.band = SNAP.style = SNAP.start = null;
+    if (reason) send("snapshot-cancelled", { reason: reason });
+  }
+
+  function onSnapKey(e) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      snapshotEnd("cancelled");
+    }
+  }
+
+  function onSnapDown(e) {
+    e.preventDefault();
+    SNAP.start = { x: e.clientX, y: e.clientY };
+    SNAP.band.style.display = "block";
+    drawBand(e.clientX, e.clientY);
+    try { SNAP.overlay.setPointerCapture(e.pointerId); } catch (err) {}
+    SNAP.overlay.addEventListener("pointermove", onSnapMove);
+    SNAP.overlay.addEventListener("pointerup", onSnapUp);
+  }
+
+  function drawBand(x, y) {
+    var s = SNAP.start;
+    var left = Math.min(s.x, x);
+    var top = Math.min(s.y, y);
+    SNAP.band.style.left = left + "px";
+    SNAP.band.style.top = top + "px";
+    SNAP.band.style.width = Math.abs(x - s.x) + "px";
+    SNAP.band.style.height = Math.abs(y - s.y) + "px";
+  }
+
+  function onSnapMove(e) {
+    if (SNAP.start) drawBand(e.clientX, e.clientY);
+  }
+
+  function onSnapUp(e) {
+    if (!SNAP.start) return;
+    var s = SNAP.start;
+    var rect = {
+      x: Math.min(s.x, e.clientX),
+      y: Math.min(s.y, e.clientY),
+      w: Math.abs(e.clientX - s.x),
+      h: Math.abs(e.clientY - s.y),
+    };
+    snapshotEnd(null);
+    if (rect.w < 12 || rect.h < 12) {
+      send("snapshot-cancelled", { reason: "too small" });
+      return;
+    }
+    takeSnapshot(rect).then(
+      function (result) { send("snapshot-result", result); },
+      function (err) { send("snapshot-error", { message: String(err && err.message ? err.message : err) }); },
+    );
+  }
+
+  /** The smallest element that wholly contains the dragged rectangle. */
+  function smallestContaining(rect) {
+    var node = document.elementFromPoint(rect.x + rect.w / 2, rect.y + rect.h / 2);
+    while (node && node.nodeType === 1 && node !== document.documentElement) {
+      var r = node.getBoundingClientRect();
+      if (
+        r.left <= rect.x + 1 &&
+        r.top <= rect.y + 1 &&
+        r.right >= rect.x + rect.w - 1 &&
+        r.bottom >= rect.y + rect.h - 1
+      ) {
+        return node;
+      }
+      node = node.parentElement;
+    }
+    return document.body || document.documentElement;
+  }
+
+  /** Fetches a resource and returns it as a data URI (cached, and capped). */
+  function inlineAsset(url) {
+    if (!url || /^data:/i.test(url)) return Promise.resolve(url || null);
+    if (snapAssets.has(url)) return Promise.resolve(snapAssets.get(url));
+    if (snapAssetBytes > SNAP_MAX_ASSET_BYTES) return Promise.resolve(null);
+    return fetch(url)
+      .then(function (res) { return res.ok ? res.blob() : null; })
+      .then(function (blob) {
+        if (!blob || blob.size > SNAP_MAX_ASSET_BYTES) return null;
+        snapAssetBytes += blob.size;
+        return new Promise(function (resolve) {
+          var reader = new FileReader();
+          reader.onload = function () { resolve(String(reader.result)); };
+          reader.onerror = function () { resolve(null); };
+          reader.readAsDataURL(blob);
+        });
+      })
+      .catch(function () { return null; })
+      .then(function (uri) {
+        snapAssets.set(url, uri);
+        return uri;
+      });
+  }
+
+  /** Replaces every url(...) in a stylesheet fragment with its data URI. */
+  function inlineCssUrls(css) {
+    var urls = [];
+    var re = /url\(\s*(['"]?)([^'")]+)\1\s*\)/g;
+    var match;
+    while ((match = re.exec(css))) {
+      if (!/^data:/i.test(match[2])) urls.push(match[2]);
+    }
+    if (!urls.length) return Promise.resolve(css);
+    return Promise.all(
+      urls.map(function (u) {
+        var abs = u;
+        try { abs = new URL(u, location.href).href; } catch (e) {}
+        return inlineAsset(abs).then(function (uri) { return { raw: u, uri: uri }; });
+      }),
+    ).then(function (results) {
+      var out = css;
+      for (var i = 0; i < results.length; i++) {
+        if (!results[i].uri) continue;
+        out = out.split("url(" + results[i].raw + ")").join("url(" + results[i].uri + ")");
+        out = out.split('url("' + results[i].raw + '")').join('url("' + results[i].uri + '")');
+        out = out.split("url('" + results[i].raw + "')").join("url('" + results[i].uri + "')");
+      }
+      return out;
+    });
+  }
+
+  /**
+   * The @font-face rules for the families the region actually uses. An SVG
+   * image may not fetch anything, so a font that isn't carried in gets
+   * substituted — and substituted metrics change where the lines break.
+   */
+  function fontFaceCss(families) {
+    var wanted = [];
+    var sheets = document.styleSheets;
+    for (var i = 0; i < sheets.length; i++) {
+      var rules;
+      try { rules = sheets[i].cssRules; } catch (e) { continue; }
+      if (!rules) continue;
+      for (var j = 0; j < rules.length; j++) {
+        var rule = rules[j];
+        if (rule.type !== 5 /* CSSRule.FONT_FACE_RULE */) continue;
+        var family = (rule.style.fontFamily || "").replace(/["']/g, "").trim().toLowerCase();
+        if (family && families[family]) wanted.push(rule.cssText);
+      }
+    }
+    if (!wanted.length) return Promise.resolve("");
+    return inlineCssUrls(wanted.join("\n"));
+  }
+
+  /** Clones a subtree, resolving every node's style and every asset it needs. */
+  function cloneForSnapshot(src, budget, families, pending) {
+    if (src.nodeType === 3) return document.createTextNode(src.nodeValue);
+    if (src.nodeType !== 1 || SNAP_SKIP[src.tagName]) return null;
+    if (src.hasAttribute("data-prophet-bookmarks") || src.hasAttribute("data-prophet-edit")) {
+      return null;
+    }
+    if (budget.left-- <= 0) return null;
+
+    var style;
+    try { style = getComputedStyle(src); } catch (e) { return null; }
+    if (style.display === "none") return null;
+
+    // An <svg> carries its own presentation; copying CSS longhands onto its
+    // children would only get in the way.
+    if (src.tagName === "svg" || src.ownerSVGElement) return src.cloneNode(true);
+
+    var out;
+    if (src.tagName === "CANVAS") {
+      // A canvas holds pixels, not markup, so it becomes an image.
+      out = document.createElement("img");
+      try { out.setAttribute("src", src.toDataURL("image/png")); } catch (e) {}
+    } else {
+      out = document.createElement(src.tagName.toLowerCase());
+    }
+
+    var css = "";
+    for (var i = 0; i < SNAP_PROPS.length; i++) {
+      var value = style.getPropertyValue(SNAP_PROPS[i]);
+      if (value) css += SNAP_PROPS[i] + ":" + value + ";";
+    }
+    out.setAttribute("style", css);
+    families[(style.fontFamily || "").split(",")[0].replace(/["']/g, "").trim().toLowerCase()] = 1;
+
+    if (src.tagName === "IMG") {
+      var href = src.currentSrc || src.src;
+      pending.push(
+        inlineAsset(href).then(function (uri) {
+          if (uri) out.setAttribute("src", uri);
+        }),
+      );
+      if (src.alt) out.setAttribute("alt", src.alt);
+    } else if (src.tagName !== "CANVAS") {
+      for (var c = src.firstChild; c; c = c.nextSibling) {
+        var child = cloneForSnapshot(c, budget, families, pending);
+        if (child) out.appendChild(child);
+      }
+    }
+    return out;
+  }
+
+  function pageBackground() {
+    var candidates = [document.body, document.documentElement];
+    for (var i = 0; i < candidates.length; i++) {
+      if (!candidates[i]) continue;
+      var bg;
+      try { bg = getComputedStyle(candidates[i]).backgroundColor; } catch (e) { continue; }
+      if (bg && bg !== "transparent" && !/rgba\(0,\s*0,\s*0,\s*0\)/.test(bg)) return bg;
+    }
+    return "#ffffff";
+  }
+
+  function takeSnapshot(rect) {
+    var host = smallestContaining(rect);
+    var hostRect = host.getBoundingClientRect();
+    var budget = { left: SNAP_MAX_NODES };
+    var families = {};
+    var pending = [];
+    var clone = cloneForSnapshot(host, budget, families, pending);
+    if (!clone) return Promise.reject(new Error("nothing to capture there"));
+    if (budget.left <= 0) {
+      return Promise.reject(new Error("that region has too much in it — try a smaller one"));
+    }
+
+    // Lifted out of its ancestors, the clone needs its own box back: the
+    // width is what decides where the lines break.
+    clone.style.setProperty("position", "absolute");
+    clone.style.setProperty("left", Math.round(hostRect.left - rect.x) + "px");
+    clone.style.setProperty("top", Math.round(hostRect.top - rect.y) + "px");
+    clone.style.setProperty("width", hostRect.width + "px");
+    clone.style.setProperty("height", "auto");
+    clone.style.setProperty("box-sizing", "border-box");
+    clone.style.setProperty("margin", "0");
+    clone.style.setProperty("max-width", "none");
+    clone.style.setProperty("transform", "none");
+
+    var W = Math.round(rect.w);
+    var H = Math.round(rect.h);
+
+    return Promise.all(pending)
+      .then(function () { return fontFaceCss(families); })
+      .then(function (fonts) {
+        // Created in an HTML document, so it is already in the XHTML
+        // namespace and the serializer declares it; adding xmlns by hand
+        // would have it declared twice, which is not valid XML.
+        var frame = document.createElement("div");
+        frame.setAttribute(
+          "style",
+          "position:relative;width:" + W + "px;height:" + H + "px;overflow:hidden;background:" +
+            pageBackground() + ";",
+        );
+        frame.appendChild(clone);
+        var markup = new XMLSerializer().serializeToString(frame);
+        var svg =
+          '<svg xmlns="http://www.w3.org/2000/svg" width="' + W + '" height="' + H + '">' +
+          (fonts ? "<defs><style>" + fonts.replace(/[<>&]/g, " ") + "</style></defs>" : "") +
+          '<foreignObject x="0" y="0" width="' + W + '" height="' + H + '">' +
+          markup +
+          "</foreignObject></svg>";
+        return rasterize(svg, W, H);
+      })
+      .then(function (png) {
+        var m = metrics();
+        var y = docYOf(rect.y);
+        return {
+          png: png,
+          width: W,
+          height: H,
+          y: y,
+          ratio: Math.min(1, Math.max(0, y / Math.max(1, m.docHeight - m.viewport))),
+          docHeight: m.docHeight,
+          label: snippetAt(rect.y),
+        };
+      });
+  }
+
+  function rasterize(svg, W, H) {
+    return new Promise(function (resolve, reject) {
+      var scale = Math.min(2, window.devicePixelRatio || 1);
+      var img = new Image();
+      img.onload = function () {
+        try {
+          var canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, Math.round(W * scale));
+          canvas.height = Math.max(1, Math.round(H * scale));
+          var ctx = canvas.getContext("2d");
+          ctx.scale(scale, scale);
+          ctx.drawImage(img, 0, 0, W, H);
+          resolve(canvas.toDataURL("image/png"));
+        } catch (e) {
+          reject(new Error("this page's snapshot could not be rendered"));
+        }
+      };
+      img.onerror = function () {
+        reject(new Error("this page's snapshot could not be rendered"));
+      };
+      img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+    });
+  }
+
   /* ---- messaging ------------------------------------------------------ */
   /** Which page of a multi-page document this is. */
   function pagePath() {
@@ -1134,7 +1716,11 @@
       if (applyHighlight(hl)) applied.push(hl.id);
       else orphaned.push(hl.id);
     }
-    send("highlights-applied", { applied: applied, orphaned: orphaned });
+    send("highlights-applied", {
+      applied: applied,
+      orphaned: orphaned,
+      positions: highlightPositions(),
+    });
   }
 
   function flashHighlight(id) {
@@ -1256,6 +1842,7 @@
         pending = true;
         requestAnimationFrame(function () {
           pending = false;
+          layoutMarkers();
           send("scroll", metrics());
         });
       },
@@ -1340,13 +1927,16 @@
     [300, 800, 2500].forEach(function (delay) {
       setTimeout(function () {
         refreshScrollRoot();
+        layoutMarkers();
         send("doc-height", metrics());
       }, delay);
     });
     window.addEventListener("load", function () {
       refreshScrollRoot();
+      layoutMarkers();
       send("doc-height", metrics());
     });
+    window.addEventListener("resize", layoutMarkers);
     // Late re-renders can wipe marks; re-apply anything missing.
     setTimeout(function () { if (knownHighlights.length) applyAll(knownHighlights); }, 2600);
   }
@@ -1427,7 +2017,11 @@
         var ok = applyHighlight(hl);
         if (ok) knownHighlights.push(hl);
         try { window.getSelection().removeAllRanges(); } catch (err) {}
-        send("highlight-result", { id: hl.id, ok: ok });
+        send("highlight-result", {
+          id: hl.id,
+          ok: ok,
+          position: ok ? highlightPositions()[hl.id] : null,
+        });
         break;
       }
       case "remove-highlight":
@@ -1472,6 +2066,15 @@
           added: EDIT.added.slice(),
           page: pagePath(),
         });
+        break;
+      case "bookmarks":
+        setMarkers(d.items || []);
+        break;
+      case "snapshot-begin":
+        snapshotBegin();
+        break;
+      case "snapshot-cancel":
+        snapshotEnd("cancelled");
         break;
       case "clear-selection":
         try { window.getSelection().removeAllRanges(); } catch (err) {}

@@ -112,6 +112,10 @@ export function mountSettings(root: HTMLElement, ctx: AppContext): () => void {
       await iosMaterializeFolder(`${settings.syncFolder}/Reading state`, ".json", 30000).catch(
         () => undefined,
       );
+      // …and the notebook, which is one file for the whole library.
+      await iosMaterializeFolder(settings.syncFolder, ".dailyprophet", 30000).catch(
+        () => undefined,
+      );
       if (r.requested > 0) {
         toast(`Downloading ${r.requested} document${r.requested === 1 ? "" : "s"} from iCloud…`);
       }
@@ -158,6 +162,11 @@ export function mountSettings(root: HTMLElement, ctx: AppContext): () => void {
       if (r.pushed) parts.push(`${r.pushed} copied out`);
       if (r.merged) parts.push(`${r.merged} annotation set${r.merged === 1 ? "" : "s"} merged`);
       if (r.states) parts.push(`${r.states} position${r.states === 1 ? "" : "s"} saved`);
+      if (r.notebookMerged) {
+        parts.push(`notebook merged (${r.notebookMerged} document${r.notebookMerged === 1 ? "" : "s"})`);
+      } else if (r.notebookPushed) {
+        parts.push("notebook published");
+      }
       toast(parts.length ? `Synced — ${parts.join(", ")}` : "Already up to date");
       if (r.errors.length) {
         toast(`${r.errors.length} item(s) had problems: ${r.errors[0]}`, "error");
@@ -191,7 +200,7 @@ export function mountSettings(root: HTMLElement, ctx: AppContext): () => void {
         el(
           "p.settings-desc",
           null,
-          "Keep this library in step with your other devices by pointing them all at the same folder — an iCloud Drive, Dropbox or network folder works well. Documents are copied there, anything new found there is added here, and highlights and bookmarks made on different devices are merged rather than overwritten.",
+          "Keep this library in step with your other devices by pointing them all at the same folder — an iCloud Drive, Dropbox or network folder works well. Documents are copied there, anything new found there is added here, and highlights and bookmarks made on different devices are merged rather than overwritten. The notebook travels with them, as a single Notebook.dailyprophet file.",
         ),
         folder
           ? el(

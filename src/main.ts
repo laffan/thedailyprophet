@@ -1,17 +1,24 @@
 import "./styles.css";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { appPlatform, importDocument } from "./api";
+import { appPlatform, importDocument, notebookImport } from "./api";
 import { toast } from "./util";
 import { mountLibrary } from "./views/library";
 import { mountCapture } from "./views/capture";
 import { mountReader } from "./views/reader";
 import { mountSettings } from "./views/settings";
 
+/** Where to land in a document — a notebook card in another section. */
+export interface ReaderJump {
+  page: string;
+  ratio?: number;
+  highlightId?: string;
+}
+
 export type Route =
   | { name: "library" }
   | { name: "capture"; url: string; append?: { docId: string; urls: string[] } }
-  | { name: "reader"; id: string }
+  | { name: "reader"; id: string; jump?: ReaderJump }
   | { name: "settings" };
 
 export interface AppContext {
@@ -47,7 +54,7 @@ function navigate(route: Route): void {
   if (route.name === "library") cleanup = mountLibrary(root, ctx);
   else if (route.name === "capture") cleanup = mountCapture(root, ctx, route.url, route.append);
   else if (route.name === "settings") cleanup = mountSettings(root, ctx);
-  else cleanup = mountReader(root, ctx, route.id);
+  else cleanup = mountReader(root, ctx, route.id, route.jump);
 }
 
 async function init(): Promise<void> {
@@ -64,15 +71,29 @@ async function init(): Promise<void> {
   await listen<string>("library://import-error", (e) => {
     toast(`Import failed: ${e.payload}`, "error");
   });
+  await listen<number>("notebook://imported", () => {
+    toast("Notebook merged into yours");
+  });
 
-  // Drag a .prophet file anywhere onto the window to import it.
+  // Drag a .prophet or .dailyprophet file anywhere onto the window.
   await getCurrentWebview().onDragDropEvent(async (event) => {
     if (event.payload.type !== "drop") return;
-    const paths = event.payload.paths.filter((p) =>
-      p.toLowerCase().endsWith(".prophet") || p.toLowerCase().endsWith(".webarchive"),
-    );
+    const paths = event.payload.paths.filter((p) => {
+      const lower = p.toLowerCase();
+      return (
+        lower.endsWith(".prophet") ||
+        lower.endsWith(".webarchive") ||
+        lower.endsWith(".dailyprophet")
+      );
+    });
     for (const p of paths) {
       try {
+        if (p.toLowerCase().endsWith(".dailyprophet")) {
+          // A notebook joins the one already here rather than the shelf.
+          const pages = await notebookImport(p);
+          toast(pages ? `Notebook merged (${pages} document${pages === 1 ? "" : "s"})` : "Notebook already up to date");
+          continue;
+        }
         const doc = await importDocument(p);
         toast(`Imported “${doc.meta.title}”`);
       } catch (err) {

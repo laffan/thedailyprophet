@@ -9,6 +9,9 @@
 //! bookmarks are unioned by id, and the newer device wins for scroll
 //! position. Two devices annotating the same document therefore keep both
 //! sets of annotations instead of one clobbering the other.
+//!
+//! The notebook travels the same folder as one `Notebook.dailyprophet` file
+//! covering the whole library, merged entry by entry.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -20,7 +23,7 @@ use std::{
 };
 use tauri::{AppHandle, Manager};
 
-use crate::library;
+use crate::{library, notebook};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -47,6 +50,9 @@ pub struct SyncReport {
     pub merged: u32,
     /// Reading-state sidecars written out (cheap, frequent).
     pub states: u32,
+    /// Notebook pages merged in from the folder, and whether ours was published.
+    pub notebook_merged: u32,
+    pub notebook_pushed: bool,
     pub unchanged: u32,
     pub errors: Vec<String>,
     pub folder: String,
@@ -75,7 +81,7 @@ fn save_settings(app: &AppHandle, s: &Settings) -> Result<(), String> {
     fs::write(path, raw).map_err(|e| format!("could not save settings: {e}"))
 }
 
-fn mtime_ms(path: &Path) -> u64 {
+pub(crate) fn mtime_ms(path: &Path) -> u64 {
     fs::metadata(path)
         .and_then(|m| m.modified())
         .ok()
@@ -205,6 +211,15 @@ fn array_of<'a>(v: &'a Value, key: &str) -> &'a [Value] {
     v.get(key).and_then(|a| a.as_array()).map(|a| a.as_slice()).unwrap_or(&[])
 }
 
+/// When an annotation last changed. Highlights never move, so they only
+/// carry `createdAt`; a bookmark can be dragged, and stamps `updatedAt`.
+fn annotation_stamp(item: &Value) -> u64 {
+    item.get("updatedAt")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0)
+        .max(item.get("createdAt").and_then(|v| v.as_u64()).unwrap_or(0))
+}
+
 /// Union two annotation lists by `id`, preferring the newer entry.
 fn union_by_id(a: &[Value], b: &[Value]) -> Vec<Value> {
     let mut out: Vec<Value> = Vec::new();
@@ -225,9 +240,7 @@ fn union_by_id(a: &[Value], b: &[Value]) -> Vec<Value> {
                 out.push(item.clone());
             }
             Some(&idx) => {
-                let existing_at = out[idx].get("createdAt").and_then(|v| v.as_u64()).unwrap_or(0);
-                let incoming_at = item.get("createdAt").and_then(|v| v.as_u64()).unwrap_or(0);
-                if incoming_at > existing_at {
+                if annotation_stamp(item) > annotation_stamp(&out[idx]) {
                     out[idx] = item.clone();
                 }
             }
@@ -531,7 +544,33 @@ pub fn run_sync(app: &AppHandle, folder: &Path) -> Result<SyncReport, String> {
         }
     }
 
+    // --- the notebook: one file for the whole library
+    if let Err(e) = sync_notebook(app, folder, &mut report) {
+        report.errors.push(format!("notebook: {e}"));
+    }
+
     Ok(report)
+}
+
+/// Merges the folder's notebook into ours, then republishes ours if it has
+/// moved on. Like the archives, it is only rewritten when it actually
+/// changed — the notebook is small, but sync folders are not free.
+fn sync_notebook(app: &AppHandle, folder: &Path, report: &mut SyncReport) -> Result<(), String> {
+    let path = folder.join(notebook::NOTEBOOK_FILE);
+    let mut merged = 0u32;
+    if path.is_file() {
+        merged = notebook::merge_from_zip(app, &path)?;
+        report.notebook_merged = merged;
+    }
+    if !notebook::has_content(app) {
+        return Ok(());
+    }
+    let stale = !path.exists() || mtime_ms(&path) + 1000 < notebook::local_stamp(app);
+    if merged > 0 || stale {
+        notebook::zip_to(app, &path)?;
+        report.notebook_pushed = true;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

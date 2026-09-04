@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-notebook-snapshot"
+description = "Enables the notebook_snapshot command without any pre-configured scope."
+commands.allow = ["notebook_snapshot"]
+
+[[permission]]
+identifier = "deny-notebook-snapshot"
+description = "Denies the notebook_snapshot command without any pre-configured scope."
+commands.deny = ["notebook_snapshot"]

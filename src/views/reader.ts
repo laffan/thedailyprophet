@@ -1,24 +1,31 @@
-import type { AppContext } from "../main";
+import type { AppContext, ReaderJump } from "../main";
 import {
   getDocument,
   getDocumentHtml,
   saveState,
   exportDocument,
   editSetRemovals,
+  notebookExport,
+  notebookPutSnapshot,
+  notebookDeleteSnapshot,
 } from "../api";
 import {
   emptyState,
+  ENTRY_COLORS,
   HIGHLIGHT_COLORS,
+  type Bookmark,
   type DocState,
   type DocSummary,
   type Highlight,
   type HighlightColor,
+  type NotebookEntry,
   type PagePosition,
 } from "../types";
 import { el, toast, debounce, uid, domainOf, clamp } from "../util";
-import { promptModal } from "../modal";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { exportAnnotationsFlow, copyAnnotations } from "../annotations";
+import { NotebookStore } from "../notebook/store";
+import { NotebookPanel, type NotebookHost } from "../notebook/panel";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import RUNTIME_SRC from "../reader/runtime.js?raw";
 
@@ -28,12 +35,19 @@ interface ProphetMessage {
   [k: string]: unknown;
 }
 
-export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () => void {
+export function mountReader(
+  root: HTMLElement,
+  ctx: AppContext,
+  id: string,
+  jump?: ReaderJump,
+): () => void {
   let disposed = false;
   let doc: DocSummary | null = null;
   let state: DocState = emptyState();
   let dirty = false;
   let sidebarOpen = false;
+  let notebook: NotebookStore | null = null;
+  let panel: NotebookPanel | null = null;
   let pendingSelection: { exact: string; prefix: string; suffix: string } | null = null;
   const pendingHighlights = new Map<string, Highlight>();
   let contextReqId = 0;
@@ -56,6 +70,8 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
   const titleLabel = el("span.reader-title", null, "…");
   const subtitleLabel = el("span.reader-subtitle");
   const sidebar = el("aside.reader-sidebar");
+  /** Set while the document is waiting for a region to be dragged. */
+  let snapshotting = false;
   const popover = el("div.hl-popover", { hidden: true });
   let menuEl: HTMLElement | null = null;
 
@@ -88,13 +104,13 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
   const sidebarBtn = el(
     "button.icon-btn",
     {
-      title: "Bookmarks & highlights",
+      title: "Notebook",
       onclick: () => {
         sidebarOpen = !sidebarOpen;
         renderSidebar();
       },
     },
-    svgList(),
+    svgNotebook(),
   );
   const menuBtn = el(
     "button.icon-btn",
@@ -300,6 +316,26 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
         {
           onclick: () => {
             closeMenus();
+            void copyAnnotations(id);
+          },
+        },
+        "Copy highlights as Markdown",
+      ),
+      el(
+        "button.card-menu-item",
+        {
+          onclick: async () => {
+            closeMenus();
+            await exportNotebookFlow();
+          },
+        },
+        "Export notebook…",
+      ),
+      el(
+        "button.card-menu-item",
+        {
+          onclick: () => {
+            closeMenus();
             beginEdit("remove");
           },
         },
@@ -340,6 +376,21 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
     try {
       await exportDocument(id, dest);
       toast("Exported — share the .prophet file with any Daily Prophet reader");
+    } catch (err) {
+      toast(`Export failed: ${err}`, "error");
+    }
+  }
+
+  async function exportNotebookFlow(): Promise<void> {
+    notebook?.flush();
+    const dest = await saveDialog({
+      defaultPath: "Notebook.dailyprophet",
+      filters: [{ name: "Daily Prophet Notebook", extensions: ["dailyprophet"] }],
+    });
+    if (!dest) return;
+    try {
+      await notebookExport(dest);
+      toast("Notebook exported");
     } catch (err) {
       toast(`Export failed: ${err}`, "error");
     }
@@ -448,6 +499,7 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
   function removeHighlight(hlId: string): void {
     post({ type: "remove-highlight", id: hlId });
     state.highlights = state.highlights.filter((h) => h.id !== hlId);
+    notebook?.remove(id, hlId);
     markDirty();
     renderSidebar();
   }
@@ -469,17 +521,31 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
     try {
       const cx = await getFrameContext();
       const pct = Math.round(cx.ratio * 100);
-      const bm = {
+      const now = Date.now();
+      const bm: Bookmark = {
         id: uid(),
         label: cx.snippet || `At ${pct}%`,
         y: cx.y,
         ratio: cx.ratio,
         docHeight: cx.docHeight,
-        createdAt: Date.now(),
+        createdAt: now,
+        updatedAt: now,
         page: currentPage,
       };
       state.bookmarks.push(bm);
+      notebook?.add(id, {
+        kind: "bookmark",
+        id: bm.id,
+        page: currentPage,
+        ratio: bm.ratio,
+        y: bm.y,
+        docHeight: bm.docHeight,
+        label: bm.label,
+        createdAt: now,
+        updatedAt: now,
+      });
       markDirty();
+      pushMarkers();
       renderSidebar();
       toast("Bookmark added");
     } catch (e) {
@@ -501,171 +567,234 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
     iframe.src = `prophet://${id}${page}`;
   }
 
-  function pageLabel(page: string | undefined): string | null {
-    if (!page || !doc) return null;
-    let mainPath = "/";
-    try {
-      const u = new URL(doc.meta.sourceUrl);
-      mainPath = u.pathname + u.search;
-    } catch {
-      /* keep */
-    }
-    if (page === mainPath || page === "/") return null;
-    const tail = page.split("?")[0].split("/").filter(Boolean).pop();
-    return tail ? decodeURIComponent(tail).replace(/[-_]+/g, " ").slice(0, 28) : null;
-  }
+  // ---- the notebook ------------------------------------------------------
 
-  // ---- sidebar -----------------------------------------------------------
-
-  let sidebarTab: "bookmarks" | "highlights" = "bookmarks";
+  const notebookHost: NotebookHost = {
+    docId: id,
+    title: "",
+    sourceUrl: "",
+    jump: jumpToEntry,
+    onDelete: deleteEntryAnchor,
+    recolor: () => pushMarkers(),
+    highlightColor: (hlId) => state.highlights.find((h) => h.id === hlId)?.color ?? null,
+    setHighlightColor: (hlId, color) => {
+      const hl = state.highlights.find((h) => h.id === hlId);
+      if (!hl) return;
+      hl.color = color;
+      post({ type: "recolor-highlight", id: hlId, color });
+      markDirty();
+    },
+    addBookmark: () => void addBookmark(),
+    startSnapshot: () => beginSnapshot(),
+    addNote: () => addNote(),
+  };
 
   function renderSidebar(): void {
     sidebar.classList.toggle("open", sidebarOpen);
-    if (!sidebarOpen) {
-      sidebar.innerHTML = "";
+    if (!sidebarOpen || !panel) return;
+    if (!panel.root.parentNode) sidebar.append(panel.root);
+    panel.render();
+  }
+
+  function openSidebar(): void {
+    sidebarOpen = true;
+    renderSidebar();
+  }
+
+  /** Scrolls to an entry, opening its document first when it is another one. */
+  function jumpToEntry(entry: NotebookEntry, docId: string): void {
+    if (docId !== id) {
+      persist.flush();
+      notebook?.flush();
+      ctx.navigate({
+        name: "reader",
+        id: docId,
+        jump: {
+          page: entry.page,
+          ratio: entry.ratio,
+          highlightId: entry.kind === "highlight" ? entry.id : undefined,
+        },
+      });
       return;
     }
-    sidebar.innerHTML = "";
-    const tabs = el(
-      "div.sidebar-tabs",
-      null,
-      el(
-        `button.sidebar-tab${sidebarTab === "bookmarks" ? ".active" : ""}`,
-        {
-          onclick: () => {
-            sidebarTab = "bookmarks";
-            renderSidebar();
-          },
-        },
-        `Bookmarks (${state.bookmarks.length})`,
-      ),
-      el(
-        `button.sidebar-tab${sidebarTab === "highlights" ? ".active" : ""}`,
-        {
-          onclick: () => {
-            sidebarTab = "highlights";
-            renderSidebar();
-          },
-        },
-        `Highlights (${state.highlights.length})`,
-      ),
-    );
-    const list = el("div.sidebar-list");
-    const actions =
-      sidebarTab === "highlights" && state.highlights.length
-        ? el(
-            "div.sidebar-actions",
-            null,
-            el(
-              "button.btn.btn-ghost.btn-small",
-              {
-                onclick: () => {
-                  if (doc) void exportAnnotationsFlow(id, doc.meta.title);
-                },
-              },
-              "Export…",
-            ),
-            el(
-              "button.btn.btn-ghost.btn-small",
-              { onclick: () => void copyAnnotations(id) },
-              "Copy as Markdown",
-            ),
-          )
-        : null;
+    if (entry.kind === "highlight") jumpTo(entry.page, { highlightId: entry.id });
+    else jumpTo(entry.page, { ratio: entry.ratio });
+  }
 
-    if (sidebarTab === "bookmarks") {
-      if (!state.bookmarks.length) {
-        list.append(el("p.muted.sidebar-empty", null, "No bookmarks yet. Tap the ribbon icon to mark your place."));
-      }
-      const ordered = [...state.bookmarks].sort(
-        (a, b) => (a.page ?? "").localeCompare(b.page ?? "") || a.ratio - b.ratio,
-      );
-      for (const bm of ordered) {
-        list.append(
-          el(
-            "div.sidebar-item",
-            null,
-            el(
-              "button.sidebar-item-main",
-              {
-                onclick: () => jumpTo(bm.page ?? currentPage, { ratio: bm.ratio }),
-              },
-              el("span.sidebar-item-label", null, bm.label),
-              el(
-                "span.sidebar-item-sub",
-                null,
-                `${pageLabel(bm.page) ? pageLabel(bm.page) + " · " : ""}${Math.round(bm.ratio * 100)}%`,
-              ),
-            ),
-            el(
-              "button.sidebar-item-action",
-              {
-                title: "Rename",
-                onclick: async () => {
-                  const label = await promptModal({ title: "Rename bookmark", value: bm.label, confirmText: "Rename" });
-                  if (label) {
-                    bm.label = label;
-                    markDirty();
-                    renderSidebar();
-                  }
-                },
-              },
-              svgPencil(),
-            ),
-            el(
-              "button.sidebar-item-action",
-              {
-                title: "Delete bookmark",
-                onclick: () => {
-                  state.bookmarks = state.bookmarks.filter((b) => b.id !== bm.id);
-                  markDirty();
-                  renderSidebar();
-                },
-              },
-              svgTrash(),
-            ),
-          ),
-        );
-      }
-    } else {
-      if (!state.highlights.length) {
-        list.append(el("p.muted.sidebar-empty", null, "No highlights yet. Select some text in the story to highlight it."));
-      }
-      for (const hl of state.highlights) {
-        const bar = el("span.sidebar-hl-bar");
-        bar.style.backgroundColor = HIGHLIGHT_COLORS[hl.color] ?? HIGHLIGHT_COLORS.sun;
-        list.append(
-          el(
-            `div.sidebar-item${hl.orphaned ? ".orphaned" : ""}`,
-            null,
-            el(
-              "button.sidebar-item-main",
-              {
-                onclick: () => {
-                  if (hl.orphaned && (hl.page ?? currentPage) === currentPage) {
-                    toast("This highlight's text no longer appears in the document", "error");
-                    return;
-                  }
-                  jumpTo(hl.page ?? currentPage, { highlightId: hl.id });
-                },
-              },
-              bar,
-              el("span.sidebar-item-label", null, hl.exact.length > 140 ? `${hl.exact.slice(0, 140)}…` : hl.exact),
-            ),
-            el(
-              "button.sidebar-item-action",
-              {
-                title: "Delete highlight",
-                onclick: () => removeHighlight(hl.id),
-              },
-              svgTrash(),
-            ),
-          ),
-        );
-      }
+  /**
+   * Deleting a card takes the thing it stands for with it: a highlight's mark
+   * and a bookmark's anchor live in reading state, a snapshot's PNG on disk.
+   */
+  function deleteEntryAnchor(entry: NotebookEntry, docId: string): void {
+    if (entry.kind === "snapshot") {
+      void notebookDeleteSnapshot(entry.id).catch(() => {});
+      return;
     }
-    sidebar.append(tabs, list);
-    if (actions) sidebar.append(actions);
+    if (docId !== id) return; // only the open document has live anchors
+    if (entry.kind === "highlight") {
+      post({ type: "remove-highlight", id: entry.id });
+      state.highlights = state.highlights.filter((h) => h.id !== entry.id);
+      markDirty();
+    } else if (entry.kind === "bookmark") {
+      state.bookmarks = state.bookmarks.filter((b) => b.id !== entry.id);
+      markDirty();
+      pushMarkers();
+    }
+  }
+
+  /** Draws this page's bookmarks as arrows in the document's left margin. */
+  function pushMarkers(): void {
+    const items = state.bookmarks
+      .filter((bm) => (bm.page ?? currentPage) === currentPage)
+      .map((bm) => ({
+        id: bm.id,
+        y: bm.y,
+        ratio: bm.ratio,
+        docHeight: bm.docHeight,
+        label: bm.label,
+        color: ENTRY_COLORS[notebook?.entry(id, bm.id)?.color ?? "crimson"],
+      }));
+    post({ type: "bookmarks", items });
+  }
+
+  function addNote(): void {
+    if (!notebook || !panel) return;
+    const entry = notebook.add(id, {
+      kind: "note",
+      page: currentPage,
+      ratio: state.scrollRatio || 0,
+    });
+    panel.pendingFocus = entry.id;
+    openSidebar();
+  }
+
+  function beginSnapshot(): void {
+    if (snapshotting) return;
+    snapshotting = true;
+    post({ type: "snapshot-begin" });
+  }
+
+  async function saveSnapshot(shot: {
+    png: string;
+    width: number;
+    height: number;
+    y: number;
+    ratio: number;
+    docHeight: number;
+    label: string;
+  }): Promise<void> {
+    if (!notebook) return;
+    const entry = notebook.add(id, {
+      kind: "snapshot",
+      page: currentPage,
+      ratio: shot.ratio,
+      y: shot.y,
+      docHeight: shot.docHeight,
+      label: shot.label,
+      imageW: shot.width,
+      imageH: shot.height,
+    });
+    try {
+      await notebookPutSnapshot(entry.id, shot.png);
+    } catch (e) {
+      // Without its image the card would be an empty frame, so it goes too.
+      notebook.remove(id, entry.id);
+      renderSidebar();
+      toast(`Could not save that snapshot: ${e}`, "error");
+      return;
+    }
+    notebook.flush();
+    openSidebar();
+    toast("Snapshot added to the notebook");
+  }
+
+  /**
+   * Lines the notebook up with reading state. Highlights and bookmarks are
+   * anchored there — that is what survives a re-render and what annotation
+   * export reads — so anything the notebook has not seen gets a card, and
+   * anything it has buried is removed for good. That last part is what makes
+   * a deletion stick: reading state is unioned across devices, so without a
+   * tombstone the annotation would simply come back.
+   */
+  function reconcileNotebook(): void {
+    if (!notebook || !doc) return;
+    notebook.page(id, { title: doc.meta.title, sourceUrl: doc.meta.sourceUrl });
+
+    state.highlights = state.highlights.filter((hl) => {
+      if (notebook!.isDeleted(id, hl.id)) {
+        markDirty();
+        return false;
+      }
+      const entry = notebook!.entry(id, hl.id);
+      if (!entry) {
+        notebook!.add(id, {
+          kind: "highlight",
+          id: hl.id,
+          page: hl.page ?? currentPage,
+          ratio: 0,
+          quote: hl.exact,
+          createdAt: hl.createdAt,
+          updatedAt: hl.createdAt,
+        });
+      } else {
+        notebook!.update(id, hl.id, { quote: hl.exact, page: hl.page ?? entry.page });
+      }
+      return true;
+    });
+
+    state.bookmarks = state.bookmarks.filter((bm) => {
+      if (notebook!.isDeleted(id, bm.id)) {
+        markDirty();
+        return false;
+      }
+      const entry = notebook!.entry(id, bm.id);
+      if (!entry) {
+        notebook!.add(id, {
+          kind: "bookmark",
+          id: bm.id,
+          page: bm.page ?? currentPage,
+          ratio: bm.ratio,
+          y: bm.y,
+          docHeight: bm.docHeight,
+          label: bm.label,
+          createdAt: bm.createdAt,
+          updatedAt: bm.updatedAt ?? bm.createdAt,
+        });
+      } else if (entry.updatedAt > (bm.updatedAt ?? bm.createdAt)) {
+        // The bookmark was dragged on another device: the notebook carries
+        // that edit, reading state only unions by id, so the notebook wins.
+        bm.y = entry.y ?? bm.y;
+        bm.ratio = entry.ratio;
+        bm.docHeight = entry.docHeight ?? bm.docHeight;
+        bm.label = entry.label ?? bm.label;
+        bm.updatedAt = entry.updatedAt;
+        markDirty();
+      } else {
+        notebook!.update(id, bm.id, {
+          page: bm.page ?? entry.page,
+          ratio: bm.ratio,
+          y: bm.y,
+          docHeight: bm.docHeight,
+          label: bm.label,
+        });
+      }
+      return true;
+    });
+  }
+
+  /** Keeps the notebook's ordering honest as highlights re-anchor. */
+  function updateHighlightPositions(
+    positions: Record<string, { y: number; ratio: number; docHeight: number }>,
+  ): void {
+    if (!notebook) return;
+    let moved = false;
+    for (const [hlId, at] of Object.entries(positions ?? {})) {
+      const entry = notebook.entry(id, hlId);
+      if (!entry || Math.abs(entry.ratio - at.ratio) < 0.0005) continue;
+      notebook.update(id, hlId, { ratio: at.ratio, y: at.y, docHeight: at.docHeight });
+      moved = true;
+    }
+    if (moved) renderSidebar();
   }
 
   // ---- iframe messages ---------------------------------------------------
@@ -680,6 +809,9 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
         state.lastOpenedAt = Date.now();
         state.lastPage = currentPage;
         markDirty();
+        // A page change tears down the overlay along with the page.
+        snapshotting = false;
+        reconcileNotebook();
         const pos = pageState(currentPage);
         const mine = state.highlights.filter((h) => (h.page ?? currentPage) === currentPage);
         post({
@@ -687,6 +819,7 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
           state: { scrollY: pos.scrollY, scrollRatio: pos.scrollRatio, docHeight: pos.docHeight },
           highlights: mine.filter((h) => !h.orphaned).concat(mine.filter((h) => h.orphaned)),
         });
+        pushMarkers();
         renderSidebar();
         if (pendingJump && pendingJump.page === currentPage) {
           const jump = pendingJump;
@@ -745,6 +878,17 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
         }
         if (hl) {
           state.highlights.push(hl);
+          const at = d.position as { y: number; ratio: number; docHeight: number } | null;
+          notebook?.add(id, {
+            kind: "highlight",
+            id: hl.id,
+            page: hl.page ?? currentPage,
+            ratio: at?.ratio ?? state.scrollRatio ?? 0,
+            y: at?.y,
+            docHeight: at?.docHeight,
+            quote: hl.exact,
+            createdAt: hl.createdAt,
+          });
           markDirty();
           renderSidebar();
         }
@@ -767,6 +911,9 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
           markDirty();
           renderSidebar();
         }
+        updateHighlightPositions(
+          d.positions as Record<string, { y: number; ratio: number; docHeight: number }>,
+        );
         break;
       }
       case "edit-selection":
@@ -788,6 +935,52 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
         }
         break;
       }
+      case "bookmark-moved": {
+        const bm = state.bookmarks.find((b) => b.id === d.id);
+        if (!bm) break;
+        bm.y = d.y as number;
+        bm.ratio = d.ratio as number;
+        bm.docHeight = d.docHeight as number;
+        bm.label = (d.label as string) || bm.label;
+        bm.updatedAt = Date.now();
+        markDirty();
+        notebook?.update(id, bm.id, {
+          y: bm.y,
+          ratio: bm.ratio,
+          docHeight: bm.docHeight,
+          label: bm.label,
+        });
+        renderSidebar();
+        break;
+      }
+      case "bookmark-activated":
+        openSidebar();
+        panel?.reveal(d.id as string);
+        break;
+      case "snapshot-armed":
+        toast("Drag over the page to snapshot it — Esc to cancel");
+        break;
+      case "snapshot-cancelled":
+        snapshotting = false;
+        break;
+      case "snapshot-result":
+        snapshotting = false;
+        void saveSnapshot(
+          d as unknown as {
+            png: string;
+            width: number;
+            height: number;
+            y: number;
+            ratio: number;
+            docHeight: number;
+            label: string;
+          },
+        );
+        break;
+      case "snapshot-error":
+        snapshotting = false;
+        toast(`Snapshot failed: ${d.message as string}`, "error");
+        break;
       case "external-link":
         void openUrl(d.href as string).catch(() => toast("Could not open link", "error"));
         break;
@@ -818,7 +1011,16 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
     titleLabel.textContent = doc.meta.title;
     subtitleLabel.textContent = domainOf(doc.meta.sourceUrl);
     progressLabel.textContent = `${Math.round((state.progress || 0) * 100)}%`;
+
+    notebook = await NotebookStore.open();
+    if (disposed) return;
+    notebookHost.title = doc.meta.title;
+    notebookHost.sourceUrl = doc.meta.sourceUrl;
+    panel = new NotebookPanel(notebook, notebookHost);
     renderSidebar();
+
+    // Arriving from a card in another document's section.
+    if (jump) pendingJump = { page: jump.page, ratio: jump.ratio, highlightId: jump.highlightId };
 
     if ((doc.meta.format ?? 1) >= 2) {
       // Resource-map archive: let the browser load it natively.
@@ -873,6 +1075,8 @@ export function mountReader(root: HTMLElement, ctx: AppContext, id: string): () 
       void saveState(id, state).catch(() => {});
     }
     persist.cancel();
+    panel?.dispose();
+    notebook?.dispose();
   };
 }
 
@@ -889,14 +1093,14 @@ function svgBookmark(): HTMLElement {
   return svg('<path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4.5L5 21V4a1 1 0 0 1 1-1z"/>');
 }
 
-function svgList(): HTMLElement {
-  return svg('<line x1="9" y1="6" x2="20" y2="6"/><line x1="9" y1="12" x2="20" y2="12"/><line x1="9" y1="18" x2="20" y2="18"/><circle cx="5" cy="6" r="1"/><circle cx="5" cy="12" r="1"/><circle cx="5" cy="18" r="1"/>');
+function svgNotebook(): HTMLElement {
+  return svg(
+    '<path d="M7 3h11a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/>' +
+      '<path d="M5 7h3"/><path d="M5 12h3"/><path d="M5 17h3"/><path d="M11 8h5"/><path d="M11 12h5"/>',
+  );
 }
 
 function svgTrash(): HTMLElement {
   return svg('<path d="M4 7h16"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/><path d="M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3"/>');
 }
 
-function svgPencil(): HTMLElement {
-  return svg('<path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>');
-}

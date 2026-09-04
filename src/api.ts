@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { DocState, DocSummary } from "./types";
+import type { DocState, DocSummary, NotebookEntry } from "./types";
 
 export function listDocuments(): Promise<DocSummary[]> {
   return invoke("list_documents");
@@ -118,6 +118,9 @@ export interface SyncReport {
   merged: number;
   /** Reading-state sidecars written (small, frequent). */
   states: number;
+  /** Notebook pages taken from the folder, and whether ours went out. */
+  notebookMerged: number;
+  notebookPushed: boolean;
   unchanged: number;
   errors: string[];
   folder: string;
@@ -174,4 +177,45 @@ export function editClearRemovals(id: string): Promise<void> {
 
 export function captureAppendPages(docId: string, urls: string[]): Promise<void> {
   return invoke("capture_control", { action: "append_pages", options: { docId, urls } });
+}
+
+// ---- the reading notebook ----------------------------------------------
+
+export interface NotebookDocFile {
+  docId: string;
+  title: string;
+  sourceUrl: string;
+  collapsed: boolean;
+  updatedAt: number;
+  entries: NotebookEntry[];
+}
+
+export function notebookLoad(): Promise<NotebookDocFile[]> {
+  return invoke("notebook_load");
+}
+
+export function notebookSaveDoc(doc: NotebookDocFile): Promise<void> {
+  return invoke("notebook_save_doc", { doc });
+}
+
+/** `data` is the base64 body of a PNG data URL. Returns its size in bytes. */
+export function notebookPutSnapshot(entryId: string, data: string): Promise<number> {
+  return invoke("notebook_put_snapshot", { entryId, data });
+}
+
+export function notebookSnapshot(entryId: string): Promise<string | null> {
+  return invoke("notebook_snapshot", { entryId });
+}
+
+export function notebookDeleteSnapshot(entryId: string): Promise<void> {
+  return invoke("notebook_delete_snapshot", { entryId });
+}
+
+export function notebookExport(dest: string): Promise<string> {
+  return invoke("notebook_export", { dest });
+}
+
+/** Merges another notebook in; returns how many document pages changed. */
+export function notebookImport(path: string): Promise<number> {
+  return invoke("notebook_import", { path });
 }

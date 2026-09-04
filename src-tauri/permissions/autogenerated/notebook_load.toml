@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-notebook-load"
+description = "Enables the notebook_load command without any pre-configured scope."
+commands.allow = ["notebook_load"]
+
+[[permission]]
+identifier = "deny-notebook-load"
+description = "Denies the notebook_load command without any pre-configured scope."
+commands.deny = ["notebook_load"]

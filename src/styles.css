@@ -695,91 +695,283 @@ button {
   flex-direction: column;
 }
 .reader-sidebar.open {
-  width: 320px;
+  width: 372px;
   border-left-color: var(--rule);
 }
-.sidebar-tabs {
-  display: flex;
-  border-bottom: 1px solid var(--rule);
+@media (max-width: 1100px) {
+  .reader-sidebar.open {
+    width: 320px;
+  }
 }
-.sidebar-tab {
-  flex: 1;
-  padding: 11px 8px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--ink-soft);
-  border-bottom: 2px solid transparent;
-}
-.sidebar-tab.active {
-  color: var(--ink);
-  border-bottom-color: var(--accent);
-}
-.sidebar-list {
-  flex: 1;
-  overflow-y: auto;
-  padding: 8px;
-}
-.sidebar-empty {
-  padding: 22px 14px;
-  font-size: 13px;
-  line-height: 1.5;
-  text-align: center;
-}
-.sidebar-item {
-  display: flex;
-  align-items: stretch;
-  border-radius: 7px;
-  margin-bottom: 2px;
-}
-.sidebar-item:hover {
-  background: rgba(128, 106, 66, 0.09);
-}
-.sidebar-item.orphaned {
-  opacity: 0.5;
-}
-.sidebar-item-main {
+
+/* ---- the reading notebook ---- */
+
+.notebook {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.nb-head {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  text-align: left;
-  padding: 9px 10px;
-  font-size: 13px;
-  line-height: 1.4;
+  padding: 11px 12px 9px;
+  border-bottom: 1px solid var(--rule);
 }
-.sidebar-item-label {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
+.nb-heading {
+  font-family: var(--serif);
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0.01em;
 }
-.sidebar-item-sub {
+.nb-count {
   font-size: 11px;
   color: var(--ink-soft);
   font-variant-numeric: tabular-nums;
 }
-.sidebar-hl-bar {
-  align-self: stretch;
-  width: 4px;
+.nb-body {
+  flex: 1;
+  overflow-y: auto;
+  position: relative;
+  padding-bottom: 10px;
+}
+
+/* The line that shows where a dragged note will land. */
+.nb-insert {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  height: 2px;
+  background: var(--accent);
   border-radius: 2px;
-  flex: none;
+  pointer-events: none;
 }
-.sidebar-item-action {
-  flex: none;
-  display: inline-flex;
+.nb-insert[hidden] {
+  display: none;
+}
+
+.nb-section + .nb-section {
+  border-top: 1px solid var(--rule);
+}
+.nb-section-head {
+  display: flex;
   align-items: center;
-  padding: 0 7px;
+  gap: 7px;
+  width: 100%;
+  padding: 9px 12px;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
   color: var(--ink-soft);
-  opacity: 0;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--paper-raised);
 }
-.sidebar-item:hover .sidebar-item-action {
+.nb-section.is-current .nb-section-head {
+  color: var(--ink);
+}
+.nb-section-head:hover {
+  background: rgba(128, 106, 66, 0.09);
+}
+.nb-caret {
+  flex: none;
+  width: 10px;
+  font-size: 10px;
+  color: var(--rule-strong);
+}
+.nb-section-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nb-section-count {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-soft);
+}
+.nb-entries {
+  padding: 0 10px 8px;
+  min-height: 8px;
+}
+.nb-section-empty {
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 4px 4px 12px;
+}
+
+.nb-card {
+  --entry-color: var(--rule-strong);
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 0 6px 0 0;
+  margin-bottom: 7px;
+  overflow: hidden;
+}
+/* A note is its colour: the whole card takes the tint, not just the spine. */
+.nb-card[data-kind="note"] {
+  background: color-mix(in srgb, var(--entry-color) 11%, var(--paper));
+  border-color: color-mix(in srgb, var(--entry-color) 32%, var(--rule));
+}
+.nb-card.is-dragging {
+  opacity: 0.4;
+}
+.nb-card.is-flashing {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.nb-spine {
+  flex: none;
+  width: 4px;
+  background: var(--entry-color);
+}
+.nb-card-body {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 2px 7px 8px;
+}
+.nb-card-jump {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-size: 13px;
+  line-height: 1.45;
+  color: inherit;
+}
+.nb-card-jump:disabled {
+  cursor: default;
+}
+.nb-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font-size: 10px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+.nb-kind {
+  color: var(--entry-color);
+  font-weight: 700;
+}
+.nb-card-meta {
+  font-variant-numeric: tabular-nums;
+}
+.nb-card-title {
+  margin-top: 3px;
+  font-family: var(--serif);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+}
+.nb-card[data-kind="highlight"] .nb-card-title {
+  background: color-mix(in srgb, var(--entry-color) 22%, transparent);
+  border-radius: 3px;
+  padding: 1px 3px;
+  margin-left: -3px;
+}
+.nb-shot {
+  display: block;
+  margin-top: 6px;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: #fff;
+}
+/* `hidden` has to beat the display rules above, not lose to them. */
+.nb-shot[hidden],
+.nb-card-title[hidden] {
+  display: none;
+}
+.nb-grip {
+  flex: none;
+  align-self: flex-start;
+  padding: 8px 2px;
+  color: var(--rule-strong);
+  cursor: grab;
+  font-size: 12px;
+  line-height: 1;
+  /* The panel must not scroll out from under a note being dragged. */
+  touch-action: none;
+  user-select: none;
+}
+.nb-grip:active {
+  cursor: grabbing;
+}
+.nb-note {
+  margin-top: 5px;
+  border-left: 2px solid var(--rule);
+  padding-left: 8px;
+}
+.nb-note[hidden] {
+  display: none;
+}
+.nb-note .cm-editor {
+  background: transparent;
+}
+
+.nb-card-tools {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 5px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.nb-card:hover .nb-card-tools,
+.nb-card:focus-within .nb-card-tools {
   opacity: 1;
 }
-.sidebar-item-action:hover {
+.nb-tool-spacer {
+  flex: 1;
+}
+.nb-swatches {
+  display: flex;
+  gap: 4px;
+}
+.nb-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.25);
+}
+.nb-swatch.is-current {
+  box-shadow: 0 0 0 2px var(--paper), 0 0 0 3px var(--ink-soft);
+}
+.nb-tool {
+  font-size: 11px;
+  color: var(--ink-soft);
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.nb-tool:hover {
   color: var(--ink);
+  background: rgba(128, 106, 66, 0.14);
+}
+.nb-tool[hidden] {
+  display: none;
+}
+.nb-delete:hover {
+  color: #b03a28;
+}
+
+.nb-actions {
+  display: flex;
+  gap: 6px;
+  padding: 9px 10px calc(9px + var(--safe-bottom));
+  border-top: 1px solid var(--rule);
+}
+.nb-actions .btn {
+  flex: 1;
 }
 
 /* ---- modals ---- */
@@ -995,16 +1187,6 @@ button {
 .is-busy {
   opacity: 0.75;
   cursor: progress;
-}
-
-/* ---- annotation browser actions ---- */
-
-.sidebar-actions {
-  display: flex;
-  gap: 8px;
-  padding: 10px;
-  border-top: 1px solid var(--rule);
-  flex-wrap: wrap;
 }
 
 /* ---- edit overlay (reader) ---- */

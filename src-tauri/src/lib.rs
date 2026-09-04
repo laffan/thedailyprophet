@@ -2,6 +2,7 @@ mod annotations;
 mod archive;
 mod capture;
 mod library;
+mod notebook;
 mod protocol;
 mod sync;
 mod transfer;
@@ -47,6 +48,13 @@ pub fn run() {
             transfer::import_document,
             annotations::render_annotations,
             annotations::export_annotations,
+            notebook::notebook_load,
+            notebook::notebook_save_doc,
+            notebook::notebook_put_snapshot,
+            notebook::notebook_snapshot,
+            notebook::notebook_delete_snapshot,
+            notebook::notebook_export,
+            notebook::notebook_import,
             sync::get_settings,
             sync::set_settings,
             sync::sync_now,
@@ -72,14 +80,19 @@ pub fn run() {
         .setup(|app| {
             library::ensure_library_dir(app.handle())?;
 
-            // .prophet files passed on the command line (Windows/Linux file
-            // associations); macOS/iOS arrive via RunEvent::Opened below.
+            // .prophet / .dailyprophet files passed on the command line
+            // (Windows/Linux file associations); macOS/iOS arrive via
+            // RunEvent::Opened below.
             #[cfg(desktop)]
             {
                 let handle = app.handle().clone();
                 for arg in std::env::args().skip(1) {
-                    if arg.to_lowercase().ends_with(".prophet") {
-                        let _ = transfer::import_from_path(&handle, std::path::Path::new(&arg));
+                    let path = std::path::Path::new(&arg);
+                    let lower = arg.to_lowercase();
+                    if lower.ends_with(".dailyprophet") {
+                        let _ = notebook::merge_from_zip(&handle, path);
+                    } else if lower.ends_with(".prophet") {
+                        let _ = transfer::import_from_path(&handle, path);
                     }
                 }
             }
@@ -98,6 +111,23 @@ pub fn run() {
                     continue;
                 }
                 if let Ok(path) = url.to_file_path() {
+                    // A notebook is merged into the one we already have
+                    // rather than added to the shelf.
+                    if path
+                        .extension()
+                        .map(|e| e.eq_ignore_ascii_case("dailyprophet"))
+                        .unwrap_or(false)
+                    {
+                        match notebook::merge_from_zip(app_handle, &path) {
+                            Ok(n) => {
+                                let _ = app_handle.emit("notebook://imported", n);
+                            }
+                            Err(e) => {
+                                let _ = app_handle.emit("library://import-error", e);
+                            }
+                        }
+                        continue;
+                    }
                     match transfer::import_from_path(app_handle, &path) {
                         Ok(summary) => {
                             sync::auto_sync(app_handle);
