@@ -39,13 +39,13 @@ const theme = EditorView.theme({
   },
   "&.cm-focused": { outline: "none" },
   ".cm-content": {
-    fontFamily: "var(--serif)",
+    fontFamily: "var(--sans)",
     padding: "6px 0",
     lineHeight: "1.5",
     caretColor: "var(--ink)",
   },
   ".cm-line": { padding: "0" },
-  ".cm-scroller": { fontFamily: "var(--serif)", lineHeight: "1.5" },
+  ".cm-scroller": { fontFamily: "var(--sans)", lineHeight: "1.5" },
   ".cm-placeholder": { color: "var(--ink-soft)", fontStyle: "italic" },
   ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--ink)" },
   "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {

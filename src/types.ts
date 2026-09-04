@@ -137,8 +137,16 @@ export interface NotebookEntry {
   docHeight?: number;
   /** The highlighted text, for a highlight. */
   quote?: string;
-  /** The heading a bookmark was dropped under. */
+  /**
+   * A highlight's colour in the document. Mirrored here (like the quote)
+   * so that a notebook — and the colour filter — makes sense for documents
+   * whose reading state is not loaded.
+   */
+  highlightColor?: HighlightColor;
+  /** The heading a bookmark was dropped under, or the name given to it. */
   label?: string;
+  /** Set once a bookmark is named by hand, so moving it keeps that name. */
+  renamed?: boolean;
   /** Pixel size of a snapshot's PNG, so the card can reserve its space. */
   imageW?: number;
   imageH?: number;

@@ -738,6 +738,61 @@ button {
   padding-bottom: 10px;
 }
 
+/* Pinned above the scroller, so it is there however far down you are. */
+.nb-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 12px 8px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--paper-raised);
+}
+.nb-filter[hidden] {
+  display: none;
+}
+.nb-chip {
+  font-size: 11px;
+  color: var(--ink-soft);
+  padding: 2px 7px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.nb-chip:hover {
+  color: var(--ink);
+  border-color: var(--rule-strong);
+}
+.nb-chip.is-on {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.nb-filter-rule {
+  width: 1px;
+  align-self: stretch;
+  margin: 1px 3px;
+  background: var(--rule);
+}
+.nb-filter-dot {
+  width: 14px;
+  height: 14px;
+  opacity: 0.45;
+}
+.nb-filter-dot:hover {
+  opacity: 0.8;
+}
+.nb-filter-dot.is-on {
+  opacity: 1;
+  box-shadow: 0 0 0 2px var(--paper-raised), 0 0 0 3px var(--ink-soft);
+}
+.nb-filter-spacer {
+  flex: 1;
+}
+.nb-filter-clear {
+  border-style: dashed;
+}
+
 /* The line that shows where a dragged note will land. */
 .nb-insert {
   position: absolute;
@@ -907,16 +962,44 @@ button {
 .nb-grip:active {
   cursor: grabbing;
 }
+/* An attached note is set off from the thing it annotates; a note card is
+   nothing but the note, so it needs no rule of its own. */
 .nb-note {
   margin-top: 5px;
   border-left: 2px solid var(--rule);
   padding-left: 8px;
+}
+.nb-card[data-kind="note"] .nb-note {
+  border-left: none;
+  padding-left: 0;
+  margin-top: 2px;
 }
 .nb-note[hidden] {
   display: none;
 }
 .nb-note .cm-editor {
   background: transparent;
+}
+
+.nb-rename {
+  display: block;
+  width: 100%;
+  margin-top: 3px;
+  padding: 3px 5px;
+  font: inherit;
+  font-family: var(--sans);
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--paper-raised);
+  border: 1px solid var(--rule-strong);
+  border-radius: 4px;
+}
+.nb-rename[hidden] {
+  display: none;
+}
+.nb-rename:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
 }
 
 .nb-card-tools {

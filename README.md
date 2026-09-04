@@ -93,8 +93,9 @@ Built on [Tauri 2.0](https://v2.tauri.app).
   - **Highlights** — everything you have highlighted, listed where it falls
     in the text, each with room for a note.
   - **Bookmarks** — a coloured arrow in the page's left margin that can be
-    dragged to move the place it marks (its label follows the heading it
-    lands under), plus a card for its note and colour.
+    dragged to move the place it marks, plus a card for its note and colour.
+    Its label follows the heading it lands under until you rename it, after
+    which the name you gave it is kept wherever you drag it.
   - **Snapshots** — the cursor becomes a crosshair and you drag a rectangle
     over the page to keep a PNG of it, note and all. The region is redrawn
     from its own computed styles with images and fonts inlined, so a
@@ -108,7 +109,10 @@ Built on [Tauri 2.0](https://v2.tauri.app).
 
   Highlights, bookmarks and snapshots sit in the order they occur in the
   text, and clicking one scrolls there; clicking one in another document's
-  section opens that document at the right place.
+  section opens that document at the right place. A bar pinned above the
+  list filters by kind and by colour — showing only the kinds and colours
+  the notebook actually holds, so the colours are a way of finding things
+  again rather than only a way of marking them.
 - **Annotation export** — save a document's highlights and bookmarks as
   Markdown, JSON, CSV or plain text, from the shelf's ⋯ menu or the reader.
 - **Portable documents** — export any story as a `.prophet` file and open it

@@ -7,7 +7,7 @@
  * a keystroke-per-write affair and only one document's page needs to move.
  */
 import { notebookLoad, notebookSaveDoc, type NotebookDocFile } from "../api";
-import type { EntryColor, NotebookEntry, NotebookKind } from "../types";
+import type { EntryColor, HighlightColor, NotebookEntry, NotebookKind } from "../types";
 import { debounce, uid } from "../util";
 
 export interface NewEntry {
@@ -21,6 +21,7 @@ export interface NewEntry {
   y?: number;
   docHeight?: number;
   quote?: string;
+  highlightColor?: HighlightColor;
   label?: string;
   imageW?: number;
   imageH?: number;
@@ -118,6 +119,7 @@ export class NotebookStore {
       y: spec.y,
       docHeight: spec.docHeight,
       quote: spec.quote,
+      highlightColor: spec.highlightColor,
       label: spec.label,
       imageW: spec.imageW,
       imageH: spec.imageH,

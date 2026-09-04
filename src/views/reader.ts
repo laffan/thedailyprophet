@@ -431,6 +431,7 @@ export function mountReader(
             if (hl) {
               hl.color = color;
               post({ type: "recolor-highlight", id: hlId, color });
+              notebook?.update(id, hlId, { highlightColor: color });
               markDirty();
               renderSidebar();
             }
@@ -582,7 +583,18 @@ export function mountReader(
       if (!hl) return;
       hl.color = color;
       post({ type: "recolor-highlight", id: hlId, color });
+      notebook?.update(id, hlId, { highlightColor: color });
       markDirty();
+    },
+    rename: (entry, docId, label) => {
+      notebook?.update(docId, entry.id, { label, renamed: true });
+      if (docId !== id) return;
+      const bm = state.bookmarks.find((b) => b.id === entry.id);
+      if (!bm) return;
+      bm.label = label;
+      bm.updatedAt = Date.now();
+      markDirty();
+      pushMarkers();
     },
     addBookmark: () => void addBookmark(),
     startSnapshot: () => beginSnapshot(),
@@ -733,11 +745,16 @@ export function mountReader(
           page: hl.page ?? currentPage,
           ratio: 0,
           quote: hl.exact,
+          highlightColor: hl.color,
           createdAt: hl.createdAt,
           updatedAt: hl.createdAt,
         });
       } else {
-        notebook!.update(id, hl.id, { quote: hl.exact, page: hl.page ?? entry.page });
+        notebook!.update(id, hl.id, {
+          quote: hl.exact,
+          highlightColor: hl.color,
+          page: hl.page ?? entry.page,
+        });
       }
       return true;
     });
@@ -887,6 +904,7 @@ export function mountReader(
             y: at?.y,
             docHeight: at?.docHeight,
             quote: hl.exact,
+            highlightColor: hl.color,
             createdAt: hl.createdAt,
           });
           markDirty();
@@ -941,7 +959,9 @@ export function mountReader(
         bm.y = d.y as number;
         bm.ratio = d.ratio as number;
         bm.docHeight = d.docHeight as number;
-        bm.label = (d.label as string) || bm.label;
+        // The label follows the heading the arrow lands under — unless it
+        // was named by hand, in which case the name is the point of it.
+        if (!notebook?.entry(id, bm.id)?.renamed) bm.label = (d.label as string) || bm.label;
         bm.updatedAt = Date.now();
         markDirty();
         notebook?.update(id, bm.id, {

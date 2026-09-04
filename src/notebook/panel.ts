@@ -16,6 +16,7 @@ import {
   type EntryColor,
   type HighlightColor,
   type NotebookEntry,
+  type NotebookKind,
 } from "../types";
 import { el } from "../util";
 import { notebookSnapshot } from "../api";
@@ -45,6 +46,8 @@ export interface NotebookHost {
   recolor: (entry: NotebookEntry, color: EntryColor, docId: string) => void;
   highlightColor: (id: string) => HighlightColor | null;
   setHighlightColor: (id: string, color: HighlightColor) => void;
+  /** Names a bookmark, in the notebook and in reading state alike. */
+  rename: (entry: NotebookEntry, docId: string, label: string) => void;
   addBookmark: () => void;
   startSnapshot: () => void;
   addNote: () => void;
@@ -81,6 +84,17 @@ export class NotebookPanel {
   private dropAt: { docId: string; index: number } | null = null;
   /** A freshly made note asks for the cursor as soon as its card exists. */
   pendingFocus: string | null = null;
+  /**
+   * What the panel is showing. Empty sets mean everything; a colour is keyed
+   * by palette, since a highlight's sky and a note's sky are different inks.
+   */
+  private readonly filter = { kinds: new Set<NotebookKind>(), colors: new Set<string>() };
+  private readonly filterBar = el("div.nb-filter");
+  private readonly noMatches = el(
+    "p.muted.nb-section-empty",
+    null,
+    "Nothing in the notebook matches that filter.",
+  );
 
   constructor(
     private readonly store: NotebookStore,
@@ -93,6 +107,8 @@ export class NotebookPanel {
         el("span.nb-heading", null, "Notebook"),
         this.countLabel,
       ),
+      // Outside the scroller, so it stays put however far down you are.
+      this.filterBar,
       this.body,
       el(
         "footer.nb-actions",
@@ -119,16 +135,33 @@ export class NotebookPanel {
 
   render(): void {
     const order = this.sectionOrder();
-    const total = order.reduce((n, docId) => n + this.store.entries(docId).length, 0);
-    this.countLabel.textContent = total ? `${total} entr${total === 1 ? "y" : "ies"}` : "empty";
+    let total = 0;
+    let shown = 0;
+    for (const docId of order) {
+      const entries = this.store.entries(docId);
+      total += entries.length;
+      shown += entries.filter((e) => this.matches(e)).length;
+    }
+    this.countLabel.textContent = !total
+      ? "empty"
+      : this.filtering()
+        ? `${shown} of ${total}`
+        : `${total} entr${total === 1 ? "y" : "ies"}`;
+    this.renderFilter(order);
 
     const live = new Set<string>();
     const nodes: HTMLElement[] = [];
     for (const docId of order) {
       const section = this.section(docId);
+      // A section with nothing left to show is out of the way, not empty.
+      if (this.filtering() && !this.store.entries(docId).some((e) => this.matches(e))) {
+        section.root.remove();
+        continue;
+      }
       this.renderSection(docId, section, live);
       nodes.push(section.root);
     }
+    if (this.filtering() && !nodes.length) nodes.push(this.noMatches);
     reconcile(this.body, [...nodes, this.insertLine]);
 
     for (const [docId, section] of this.sections) {
@@ -161,6 +194,103 @@ export class NotebookPanel {
   dispose(): void {
     for (const card of this.cards.values()) card.destroy();
     this.cards.clear();
+  }
+
+  // ---- filtering ---------------------------------------------------------
+
+  private filtering(): boolean {
+    return this.filter.kinds.size > 0 || this.filter.colors.size > 0;
+  }
+
+  private matches(entry: NotebookEntry): boolean {
+    if (this.filter.kinds.size && !this.filter.kinds.has(entry.kind)) return false;
+    if (this.filter.colors.size && !this.filter.colors.has(colorKey(entry, this.host))) {
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Only the kinds and colours actually in the notebook get a control — a
+   * filter for something you have never used is just clutter.
+   */
+  private renderFilter(order: string[]): void {
+    const kinds = new Set<NotebookKind>();
+    const inUse = new Set<string>();
+    for (const docId of order) {
+      for (const entry of this.store.entries(docId)) {
+        kinds.add(entry.kind);
+        inUse.add(colorKey(entry, this.host));
+      }
+    }
+    // Walk the palettes, not the entries, so the dots keep their places as
+    // the notebook fills up.
+    const swatches: Array<{ key: string; ink: string; name: string; highlight: boolean }> = [];
+    for (const name of Object.keys(HIGHLIGHT_COLORS) as HighlightColor[]) {
+      if (inUse.has(`hl:${name}`)) {
+        swatches.push({ key: `hl:${name}`, ink: HIGHLIGHT_COLORS[name], name, highlight: true });
+      }
+    }
+    for (const name of Object.keys(ENTRY_COLORS) as EntryColor[]) {
+      if (inUse.has(name)) {
+        swatches.push({ key: name, ink: ENTRY_COLORS[name], name, highlight: false });
+      }
+    }
+
+    // A selection whose last entry has gone would hide everything.
+    for (const kind of this.filter.kinds) if (!kinds.has(kind)) this.filter.kinds.delete(kind);
+    for (const key of this.filter.colors) if (!inUse.has(key)) this.filter.colors.delete(key);
+
+    this.filterBar.hidden = kinds.size < 2 && swatches.length < 2;
+    this.filterBar.innerHTML = "";
+    if (this.filterBar.hidden) return;
+
+    // One kind is not a choice, so it gets no chip.
+    for (const kind of kinds.size > 1 ? KIND_ORDER : []) {
+      if (!kinds.has(kind)) continue;
+      const on = this.filter.kinds.has(kind);
+      this.filterBar.append(
+        el(
+          `button.nb-chip${on ? ".is-on" : ""}`,
+          {
+            title: `Show only ${KIND_PLURAL[kind].toLowerCase()}`,
+            onclick: () => this.toggle(this.filter.kinds, kind),
+          },
+          KIND_PLURAL[kind],
+        ),
+      );
+    }
+    if (kinds.size > 1 && swatches.length) this.filterBar.append(el("span.nb-filter-rule"));
+    for (const swatch of swatches) {
+      const on = this.filter.colors.has(swatch.key);
+      const dot = el(`button.nb-swatch.nb-filter-dot${on ? ".is-on" : ""}`, {
+        title: `Show only ${swatch.name}${swatch.highlight ? " highlights" : ""}`,
+        onclick: () => this.toggle(this.filter.colors, swatch.key),
+      });
+      dot.style.backgroundColor = swatch.ink;
+      this.filterBar.append(dot);
+    }
+    if (this.filtering()) {
+      this.filterBar.append(
+        el("span.nb-filter-spacer"),
+        el(
+          "button.nb-chip.nb-filter-clear",
+          {
+            onclick: () => {
+              this.filter.kinds.clear();
+              this.filter.colors.clear();
+              this.render();
+            },
+          },
+          "Clear",
+        ),
+      );
+    }
+  }
+
+  private toggle<T>(set: Set<T>, value: T): void {
+    if (!set.delete(value)) set.add(value);
+    this.render();
   }
 
   // ---- sections ----------------------------------------------------------
@@ -206,7 +336,7 @@ export class NotebookPanel {
     const page = isCurrent
       ? this.store.page(docId, { title: this.host.title, sourceUrl: this.host.sourceUrl })
       : this.store.page(docId);
-    const entries = this.store.entries(docId);
+    const entries = this.store.entries(docId).filter((e) => this.matches(e));
     const collapsed = page.collapsed;
 
     section.root.classList.toggle("is-current", isCurrent);
@@ -285,6 +415,41 @@ export class NotebookPanel {
 
     const noteHost = el("div.nb-note", { hidden: true });
 
+    // Renaming a bookmark: the label swaps for a field in place, so the
+    // card keeps its position in the list while you type.
+    let renaming = false;
+    const nameField = el("input.nb-rename", { hidden: true, spellcheck: false }) as HTMLInputElement;
+    const stopRenaming = (commit: boolean): void => {
+      if (!renaming) return;
+      renaming = false;
+      nameField.hidden = true;
+      title.hidden = !title.textContent;
+      const value = nameField.value.trim();
+      if (commit && entry && value && value !== entry.label) {
+        this.host.rename(entry, docId, value);
+        this.render();
+      }
+    };
+    const startRenaming = (): void => {
+      if (!entry) return;
+      renaming = true;
+      nameField.value = entry.label ?? "";
+      nameField.hidden = false;
+      title.hidden = true;
+      nameField.focus();
+      nameField.select();
+    };
+    nameField.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        stopRenaming(true);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        stopRenaming(false);
+      }
+    });
+    nameField.addEventListener("blur", () => stopRenaming(true));
+
     let mounting = false;
     const mountEditor = (focus: boolean): void => {
       noteHost.hidden = false;
@@ -321,6 +486,11 @@ export class NotebookPanel {
     };
 
     const swatches = el("span.nb-swatches");
+    const renameBtn = el(
+      "button.nb-tool",
+      { title: "Give this bookmark a name", onclick: () => startRenaming() },
+      "Rename",
+    );
     const noteBtn = el(
       "button.nb-tool",
       {
@@ -345,12 +515,20 @@ export class NotebookPanel {
       },
       "Delete",
     );
-    const tools = el("div.nb-card-tools", null, swatches, el("span.nb-tool-spacer"), noteBtn, del);
+    const tools = el(
+      "div.nb-card-tools",
+      null,
+      swatches,
+      el("span.nb-tool-spacer"),
+      renameBtn,
+      noteBtn,
+      del,
+    );
     const root = el(
       "article.nb-card",
       null,
       spine,
-      el("div.nb-card-body", null, jump, noteHost, tools),
+      el("div.nb-card-body", null, jump, nameField, noteHost, tools),
       grip,
     );
 
@@ -359,10 +537,7 @@ export class NotebookPanel {
       docId = nextDoc;
       root.dataset.kind = next.kind;
       root.dataset.id = next.id;
-      const accent =
-        next.kind === "highlight"
-          ? HIGHLIGHT_COLORS[this.host.highlightColor(next.id) ?? "sun"]
-          : (ENTRY_COLORS[next.color] ?? ENTRY_COLORS.ink);
+      const accent = colorInk(next, this.host);
       spine.style.backgroundColor = accent;
       root.style.setProperty("--entry-color", accent);
 
@@ -375,7 +550,8 @@ export class NotebookPanel {
           : next.kind === "bookmark"
             ? next.label || `At ${Math.round(next.ratio * 100)}%`
             : "";
-      title.hidden = !title.textContent;
+      title.hidden = !title.textContent || renaming;
+      renameBtn.hidden = next.kind !== "bookmark";
       jump.disabled = next.kind === "note";
       grip.hidden = next.kind !== "note";
 
@@ -408,9 +584,7 @@ export class NotebookPanel {
   private renderSwatches(host: HTMLElement, entry: NotebookEntry, docId: string): void {
     const isHighlight = entry.kind === "highlight";
     const palette: Record<string, string> = isHighlight ? HIGHLIGHT_COLORS : ENTRY_COLORS;
-    const current = isHighlight
-      ? (this.host.highlightColor(entry.id) ?? "sun")
-      : entry.color;
+    const current = isHighlight ? highlightInkOf(entry, this.host) : entry.color;
     const names = Object.keys(palette);
     if (host.childElementCount !== names.length) {
       host.innerHTML = "";
@@ -575,12 +749,42 @@ export class NotebookPanel {
   }
 }
 
-const KIND_LABEL: Record<NotebookEntry["kind"], string> = {
+const KIND_LABEL: Record<NotebookKind, string> = {
   highlight: "Highlight",
   bookmark: "Bookmark",
   snapshot: "Snapshot",
   note: "Note",
 };
+
+const KIND_PLURAL: Record<NotebookKind, string> = {
+  highlight: "Highlights",
+  bookmark: "Bookmarks",
+  snapshot: "Snapshots",
+  note: "Notes",
+};
+
+/** Reading order, so the filter chips do not shuffle about. */
+const KIND_ORDER: NotebookKind[] = ["highlight", "bookmark", "snapshot", "note"];
+
+/** A highlight's colour comes from the document; the rest carry their own. */
+function highlightInkOf(entry: NotebookEntry, host: NotebookHost): HighlightColor {
+  return entry.highlightColor ?? host.highlightColor(entry.id) ?? "sun";
+}
+
+/**
+ * What a colour filter is keyed on. Highlights use the document's palette and
+ * everything else the notebook's, and the two share a name or two, so the
+ * palette is part of the key.
+ */
+function colorKey(entry: NotebookEntry, host: NotebookHost): string {
+  return entry.kind === "highlight" ? `hl:${highlightInkOf(entry, host)}` : entry.color;
+}
+
+function colorInk(entry: NotebookEntry, host: NotebookHost): string {
+  return entry.kind === "highlight"
+    ? HIGHLIGHT_COLORS[highlightInkOf(entry, host)]
+    : (ENTRY_COLORS[entry.color] ?? ENTRY_COLORS.ink);
+}
 
 function clip(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
