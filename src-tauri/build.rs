@@ -24,6 +24,7 @@ fn main() {
             "notebook_snapshot",
             "notebook_delete_snapshot",
             "notebook_export",
+            "notebook_export_markdown",
             "notebook_import",
             "get_settings",
             "set_settings",

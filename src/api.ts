@@ -215,6 +215,11 @@ export function notebookExport(dest: string): Promise<string> {
   return invoke("notebook_export", { dest });
 }
 
+/** Writes the notebook as a zip of Markdown files and their images. */
+export function notebookExportMarkdown(dest: string): Promise<string> {
+  return invoke("notebook_export_markdown", { dest });
+}
+
 /** Merges another notebook in; returns how many document pages changed. */
 export function notebookImport(path: string): Promise<number> {
   return invoke("notebook_import", { path });

@@ -5,8 +5,9 @@ import {
   renameDocument,
   exportDocument,
   importDocument,
+  saveState,
 } from "../api";
-import type { DocSummary } from "../types";
+import { emptyState, type DocState, type DocSummary } from "../types";
 import { el, toast, fmtDate, fmtBytes, domainOf } from "../util";
 import { coverEl } from "../covers";
 import { promptModal, confirmModal } from "../modal";
@@ -123,6 +124,10 @@ export function mountLibrary(root: HTMLElement, ctx: AppContext): () => void {
     if (disposed) return;
 
     docs.sort((a, b) => {
+      // Pinned documents lead; the rest keep to most-recently-read.
+      const pa = a.state?.pinned ? 1 : 0;
+      const pb = b.state?.pinned ? 1 : 0;
+      if (pa !== pb) return pb - pa;
       const ka = a.state?.lastOpenedAt || a.meta.createdAt;
       const kb = b.state?.lastOpenedAt || b.meta.createdAt;
       return kb - ka;
@@ -150,6 +155,23 @@ export function mountLibrary(root: HTMLElement, ctx: AppContext): () => void {
     const grid = el("div.shelf-grid");
     for (const doc of docs) grid.append(card(doc));
     shelf.append(grid);
+  }
+
+  /**
+   * Pinning is reading state, not metadata: it is a few bytes in the file
+   * that already syncs, rather than a reason to republish the archive.
+   */
+  async function togglePin(doc: DocSummary): Promise<void> {
+    const state: DocState = { ...emptyState(), ...(doc.state ?? {}) };
+    state.pinned = !state.pinned;
+    try {
+      await saveState(doc.meta.id, state);
+    } catch (err) {
+      toast(`Could not pin that: ${err}`, "error");
+      return;
+    }
+    toast(state.pinned ? "Pinned to the top of the shelf" : "Unpinned");
+    void refresh();
   }
 
   function card(doc: DocSummary): HTMLElement {
@@ -181,6 +203,10 @@ export function mountLibrary(root: HTMLElement, ctx: AppContext): () => void {
                 await renameDocument(doc.meta.id, title);
                 void refresh();
               }
+            }),
+            menuItem(doc.state?.pinned ? "Unpin document" : "Pin document", async () => {
+              closeMenu();
+              await togglePin(doc);
             }),
             menuItem("Export document…", async () => {
               closeMenu();
@@ -226,7 +252,7 @@ export function mountLibrary(root: HTMLElement, ctx: AppContext): () => void {
     if (fill) fill.style.width = `${Math.max(3, pct)}%`;
 
     return el(
-      "article.book-card",
+      `article.book-card${doc.state?.pinned ? ".is-pinned" : ""}`,
       null,
       coverWrap,
       el("h3.book-title", { title: doc.meta.title, onclick: () => ctx.navigate({ name: "reader", id: doc.meta.id }) }, doc.meta.title),

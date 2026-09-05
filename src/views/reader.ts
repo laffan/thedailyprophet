@@ -6,6 +6,7 @@ import {
   exportDocument,
   editSetRemovals,
   notebookExport,
+  notebookExportMarkdown,
   notebookPutSnapshot,
   notebookDeleteSnapshot,
 } from "../api";
@@ -25,7 +26,7 @@ import { el, toast, debounce, uid, domainOf, clamp } from "../util";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { exportAnnotationsFlow, copyAnnotations } from "../annotations";
 import { NotebookStore } from "../notebook/store";
-import { NotebookPanel, type NotebookHost } from "../notebook/panel";
+import { NotebookPanel, type DocumentHit, type NotebookHost } from "../notebook/panel";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import RUNTIME_SRC from "../reader/runtime.js?raw";
 
@@ -51,6 +52,8 @@ export function mountReader(
   let pendingSelection: { exact: string; prefix: string; suffix: string } | null = null;
   const pendingHighlights = new Map<string, Highlight>();
   let contextReqId = 0;
+  let findReqId = 0;
+  const findWaiters = new Map<number, (hits: DocumentHit[]) => void>();
   const contextWaiters = new Map<number, (p: { snippet: string; y: number; ratio: number; docHeight: number }) => void>();
   /** Path of the page currently shown (multi-page documents). */
   let currentPage = "/";
@@ -334,6 +337,16 @@ export function mountReader(
       el(
         "button.card-menu-item",
         {
+          onclick: async () => {
+            closeMenus();
+            await exportNotebookMarkdownFlow();
+          },
+        },
+        "Export notebook as Markdown…",
+      ),
+      el(
+        "button.card-menu-item",
+        {
           onclick: () => {
             closeMenus();
             beginEdit("remove");
@@ -391,6 +404,22 @@ export function mountReader(
     try {
       await notebookExport(dest);
       toast("Notebook exported");
+    } catch (err) {
+      toast(`Export failed: ${err}`, "error");
+    }
+  }
+
+  /** The readable export: a Markdown file per document, plus its images. */
+  async function exportNotebookMarkdownFlow(): Promise<void> {
+    notebook?.flush();
+    const dest = await saveDialog({
+      defaultPath: "Notebook.zip",
+      filters: [{ name: "Zip archive", extensions: ["zip"] }],
+    });
+    if (!dest) return;
+    try {
+      await notebookExportMarkdown(dest);
+      toast("Notebook exported as Markdown");
     } catch (err) {
       toast(`Export failed: ${err}`, "error");
     }
@@ -547,6 +576,7 @@ export function mountReader(
       });
       markDirty();
       pushMarkers();
+      notebook?.setCollapsed(id, false);
       renderSidebar();
       toast("Bookmark added");
     } catch (e) {
@@ -555,12 +585,22 @@ export function mountReader(
   }
 
   /** Where to scroll (or what to flash) once a page finishes loading. */
-  let pendingJump: { page: string; ratio?: number; highlightId?: string } | null = null;
+  let pendingJump: {
+    page: string;
+    ratio?: number;
+    highlightId?: string;
+    center?: boolean;
+  } | null = null;
 
-  function jumpTo(page: string, target: { ratio?: number; highlightId?: string }): void {
+  function jumpTo(
+    page: string,
+    target: { ratio?: number; highlightId?: string; center?: boolean },
+  ): void {
     if (page === currentPage) {
       if (target.highlightId) post({ type: "scroll-to-highlight", id: target.highlightId });
-      else if (target.ratio !== undefined) post({ type: "scroll-to", ratio: target.ratio, smooth: true });
+      else if (target.ratio !== undefined) {
+        post({ type: "scroll-to", ratio: target.ratio, smooth: true, center: target.center });
+      }
       return;
     }
     if (!doc || (doc.meta.format ?? 1) < 2) return;
@@ -599,7 +639,21 @@ export function mountReader(
     addBookmark: () => void addBookmark(),
     startSnapshot: () => beginSnapshot(),
     addNote: () => addNote(),
+    findInDocument: (query) => findInDocument(query),
+    gotoDocumentHit: (index) => post(index < 0 ? { type: "find-clear" } : { type: "find-goto", i: index }),
   };
+
+  /** Asks the open page where a phrase occurs. */
+  function findInDocument(query: string): Promise<DocumentHit[]> {
+    return new Promise((resolve, reject) => {
+      const reqId = ++findReqId;
+      findWaiters.set(reqId, resolve);
+      post({ type: "find", query, reqId });
+      setTimeout(() => {
+        if (findWaiters.delete(reqId)) reject(new Error("the page did not respond"));
+      }, 4000);
+    });
+  }
 
   function renderSidebar(): void {
     sidebar.classList.toggle("open", sidebarOpen);
@@ -611,6 +665,15 @@ export function mountReader(
   function openSidebar(): void {
     sidebarOpen = true;
     renderSidebar();
+  }
+
+  /**
+   * Something new belongs somewhere you can see it: a section folded shut
+   * would swallow a note the moment it was made.
+   */
+  function showNewEntry(): void {
+    notebook?.setCollapsed(id, false);
+    openSidebar();
   }
 
   /** Scrolls to an entry, opening its document first when it is another one. */
@@ -625,12 +688,15 @@ export function mountReader(
           page: entry.page,
           ratio: entry.ratio,
           highlightId: entry.kind === "highlight" ? entry.id : undefined,
+          center: entry.kind !== "highlight",
         },
       });
       return;
     }
     if (entry.kind === "highlight") jumpTo(entry.page, { highlightId: entry.id });
-    else jumpTo(entry.page, { ratio: entry.ratio });
+    // A bookmark or snapshot marks a point, so put that point in the middle
+    // of the window — where the arrow was dropped in the first place.
+    else jumpTo(entry.page, { ratio: entry.ratio, center: true });
   }
 
   /**
@@ -677,7 +743,7 @@ export function mountReader(
       ratio: state.scrollRatio || 0,
     });
     panel.pendingFocus = entry.id;
-    openSidebar();
+    showNewEntry();
   }
 
   function beginSnapshot(): void {
@@ -716,7 +782,7 @@ export function mountReader(
       return;
     }
     notebook.flush();
-    openSidebar();
+    showNewEntry();
     toast("Snapshot added to the notebook");
   }
 
@@ -843,7 +909,9 @@ export function mountReader(
           pendingJump = null;
           setTimeout(() => {
             if (jump.highlightId) post({ type: "scroll-to-highlight", id: jump.highlightId });
-            else if (jump.ratio !== undefined) post({ type: "scroll-to", ratio: jump.ratio, smooth: false });
+            else if (jump.ratio !== undefined) {
+              post({ type: "scroll-to", ratio: jump.ratio, smooth: false, center: jump.center });
+            }
           }, 250);
         }
         break;
@@ -907,6 +975,7 @@ export function mountReader(
             highlightColor: hl.color,
             createdAt: hl.createdAt,
           });
+          notebook?.setCollapsed(id, false);
           markDirty();
           renderSidebar();
         }
@@ -976,6 +1045,17 @@ export function mountReader(
       case "bookmark-activated":
         openSidebar();
         panel?.reveal(d.id as string);
+        break;
+      case "find-result": {
+        const waiter = findWaiters.get(d.reqId as number);
+        if (waiter) {
+          findWaiters.delete(d.reqId as number);
+          waiter((d.hits as DocumentHit[]) ?? []);
+        }
+        break;
+      }
+      case "find-missing":
+        toast("That passage is no longer in the page", "error");
         break;
       case "snapshot-armed":
         toast("Drag over the page to snapshot it — Esc to cancel");

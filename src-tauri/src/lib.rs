@@ -54,6 +54,7 @@ pub fn run() {
             notebook::notebook_snapshot,
             notebook::notebook_delete_snapshot,
             notebook::notebook_export,
+            notebook::notebook_export_markdown,
             notebook::notebook_import,
             sync::get_settings,
             sync::set_settings,

@@ -32,6 +32,8 @@ export interface DocState {
   pages?: Record<string, PagePosition>;
   /** Path of the page last being read. */
   lastPage?: string;
+  /** Held at the top of the shelf. Lives here so it follows a device sync. */
+  pinned?: boolean;
 }
 
 export interface Bookmark {

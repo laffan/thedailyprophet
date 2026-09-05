@@ -1027,6 +1027,119 @@
     return out;
   }
 
+  /* ---- notebook: finding text in the page -------------------------------
+     The notebook's search field looks through the open document as well as
+     through the notebook, so a phrase you remember reading is as findable
+     as one you happened to highlight. */
+
+  var FIND = { hits: [], timer: 0 };
+  var FIND_MAX = 60;
+  var FIND_CONTEXT = 46;
+
+  function findHits(query) {
+    ensureIndex();
+    var needle = normalizeQuote(query).toLowerCase();
+    if (needle.length < 2 || !textIndex) return [];
+    var hay = textIndex.norm.toLowerCase();
+    var hits = [];
+    var at = hay.indexOf(needle);
+    while (at !== -1 && hits.length < FIND_MAX) {
+      hits.push({ start: at, end: at + needle.length });
+      at = hay.indexOf(needle, at + needle.length);
+    }
+    return hits;
+  }
+
+  /** A hit's place in the page, as a live range over the text nodes. */
+  function rangeForHit(hit) {
+    if (!textIndex) return null;
+    var map = textIndex.normToRaw;
+    if (hit.start >= map.length) return null;
+    var startRaw = map[hit.start];
+    var endRaw = hit.end - 1 < map.length ? map[hit.end - 1] + 1 : textIndex.raw.length;
+    var a = posToNodeOffset(startRaw, false);
+    var b = posToNodeOffset(endRaw, true);
+    if (!a || !b) return null;
+    var range = document.createRange();
+    try {
+      range.setStart(a.node, a.offset);
+      range.setEnd(b.node, b.offset);
+    } catch (e) {
+      return null;
+    }
+    return range.collapsed ? null : range;
+  }
+
+  function findSnippet(hit) {
+    var norm = textIndex.norm;
+    var from = Math.max(0, hit.start - FIND_CONTEXT);
+    var to = Math.min(norm.length, hit.end + FIND_CONTEXT);
+    return {
+      before: (from > 0 ? "…" : "") + norm.slice(from, hit.start),
+      match: norm.slice(hit.start, hit.end),
+      after: norm.slice(hit.end, to) + (to < norm.length ? "…" : ""),
+    };
+  }
+
+  function reportFind(query, reqId) {
+    clearFindFlash();
+    FIND.hits = findHits(query);
+    var m = metrics();
+    var max = Math.max(1, m.docHeight - m.viewport);
+    var out = [];
+    for (var i = 0; i < FIND.hits.length; i++) {
+      var range = rangeForHit(FIND.hits[i]);
+      var y = 0;
+      if (range) {
+        try { y = docYOf(range.getBoundingClientRect().top); } catch (e) {}
+      }
+      var snippet = findSnippet(FIND.hits[i]);
+      out.push({
+        i: i,
+        before: snippet.before,
+        match: snippet.match,
+        after: snippet.after,
+        y: y,
+        ratio: Math.min(1, Math.max(0, y / max)),
+      });
+    }
+    send("find-result", { reqId: reqId, query: query, hits: out });
+  }
+
+  function clearFindFlash() {
+    if (FIND.timer) {
+      clearTimeout(FIND.timer);
+      FIND.timer = 0;
+    }
+    unwrapMarks("mark[data-prophet-find]");
+  }
+
+  /** Scrolls to a hit and lights it up for a moment. */
+  function findGoto(i) {
+    var hit = FIND.hits[i];
+    if (!hit) return;
+    clearFindFlash();
+    var range = rangeForHit(hit);
+    if (!range) {
+      send("find-missing", { i: i });
+      return;
+    }
+    userScrolled = true;
+    wrapRangeWith(range, function (mark) {
+      mark.setAttribute("data-prophet-find", "1");
+      mark.style.backgroundColor = "rgba(122, 46, 29, 0.28)";
+      mark.style.boxShadow = "0 0 0 2px rgba(122, 46, 29, 0.75)";
+      mark.style.borderRadius = "2px";
+      mark.style.color = "inherit";
+    });
+    var first = document.querySelector("mark[data-prophet-find]");
+    if (first) {
+      try { first.scrollIntoView({ block: "center", behavior: "smooth" }); }
+      catch (e) { first.scrollIntoView(); }
+    }
+    FIND.timer = setTimeout(clearFindFlash, 2600);
+  }
+
   /* ---- notebook: snapshots ----------------------------------------------
      Drag a rectangle over the page and get a PNG of it. Nothing can ask a
      webview to photograph part of itself, so the region is redrawn: the
@@ -1635,7 +1748,11 @@
   }
 
   /* ---- highlight rendering --------------------------------------------- */
-  function wrapRange(range, id, color) {
+  /**
+   * Wraps everything a range covers in <mark> elements, handing each one to
+   * `paint`. Highlights and search hits differ only in how they are painted.
+   */
+  function wrapRangeWith(range, paint) {
     var rootNode = range.commonAncestorContainer;
     if (rootNode.nodeType !== 1) rootNode = rootNode.parentNode;
     var walker = document.createTreeWalker(rootNode, NodeFilter.SHOW_TEXT, null);
@@ -1656,13 +1773,7 @@
       if (start > 0) piece = t.splitText(start);
       if (end - start < piece.nodeValue.length) piece.splitText(end - start);
       var mark = document.createElement("mark");
-      mark.setAttribute("data-prophet-hl", id);
-      mark.setAttribute("data-prophet-color", color);
-      mark.style.backgroundColor = COLORS[color] || COLORS.sun;
-      mark.style.borderBottom = "2px solid " + (BORDERS[color] || BORDERS.sun);
-      mark.style.color = "inherit";
-      mark.style.padding = "0";
-      mark.style.cursor = "pointer";
+      paint(mark);
       piece.parentNode.insertBefore(mark, piece);
       mark.appendChild(piece);
       made++;
@@ -1671,8 +1782,21 @@
     return made > 0;
   }
 
-  function unwrapHighlight(id) {
-    var marks = document.querySelectorAll('mark[data-prophet-hl="' + cssEscape(id) + '"]');
+  function wrapRange(range, id, color) {
+    return wrapRangeWith(range, function (mark) {
+      mark.setAttribute("data-prophet-hl", id);
+      mark.setAttribute("data-prophet-color", color);
+      mark.style.backgroundColor = COLORS[color] || COLORS.sun;
+      mark.style.borderBottom = "2px solid " + (BORDERS[color] || BORDERS.sun);
+      mark.style.color = "inherit";
+      mark.style.padding = "0";
+      mark.style.cursor = "pointer";
+    });
+  }
+
+  /** Takes the <mark> elements matching a selector back out of the page. */
+  function unwrapMarks(selector) {
+    var marks = document.querySelectorAll(selector);
     for (var i = 0; i < marks.length; i++) {
       var m = marks[i];
       var parent = m.parentNode;
@@ -1682,6 +1806,10 @@
     }
     indexDirty = true;
     return marks.length > 0;
+  }
+
+  function unwrapHighlight(id) {
+    return unwrapMarks('mark[data-prophet-hl="' + cssEscape(id) + '"]');
   }
 
   function recolorHighlight(id, color) {
@@ -2032,27 +2160,37 @@
         recolorHighlight(d.id, d.color);
         knownHighlights.forEach(function (h) { if (h.id === d.id) h.color = d.color; });
         break;
-      case "scroll-to":
+      case "scroll-to": {
         userScrolled = true;
-        if (typeof d.y === "number") scrollTo(d.y, d.smooth !== false);
+        var sm = metrics();
+        // An anchored entry is centred, so its arrow lands where it was
+        // dropped rather than half off the top of the window.
+        var lift = d.center ? sm.viewport / 2 : 0;
+        if (typeof d.y === "number") scrollTo(Math.max(0, d.y - lift), d.smooth !== false);
         else if (typeof d.ratio === "number") {
-          var m = metrics();
-          scrollTo(d.ratio * Math.max(0, m.docHeight - m.viewport), d.smooth !== false);
+          var to = d.ratio * Math.max(0, sm.docHeight - sm.viewport);
+          scrollTo(Math.max(0, to - lift), d.smooth !== false);
         }
         break;
+      }
       case "scroll-to-highlight":
         userScrolled = true;
         if (!flashHighlight(d.id)) send("highlight-missing", { id: d.id });
         break;
-      case "get-context":
+      case "get-context": {
+        // The middle of the window, not its top edge: that is where the
+        // reader is actually looking, and where the arrow will be drawn.
+        var cm = metrics();
+        var mid = Math.min(cm.docHeight, cm.y + cm.viewport / 2);
         send("context", {
           reqId: d.reqId,
-          snippet: contextSnippet(),
-          y: metrics().y,
-          ratio: metrics().ratio,
-          docHeight: metrics().docHeight,
+          snippet: snippetAt(cm.viewport / 2),
+          y: mid,
+          ratio: Math.min(1, Math.max(0, mid / Math.max(1, cm.docHeight - cm.viewport))),
+          docHeight: cm.docHeight,
         });
         break;
+      }
       case "edit-begin":
         editBegin(d.mode);
         break;
@@ -2069,6 +2207,16 @@
         break;
       case "bookmarks":
         setMarkers(d.items || []);
+        break;
+      case "find":
+        reportFind(d.query || "", d.reqId);
+        break;
+      case "find-goto":
+        findGoto(d.i);
+        break;
+      case "find-clear":
+        clearFindFlash();
+        FIND.hits = [];
         break;
       case "snapshot-begin":
         snapshotBegin();

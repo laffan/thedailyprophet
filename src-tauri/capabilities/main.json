@@ -29,6 +29,7 @@
     "allow-notebook-snapshot",
     "allow-notebook-delete-snapshot",
     "allow-notebook-export",
+    "allow-notebook-export-markdown",
     "allow-notebook-import",
     "allow-get-settings",
     "allow-set-settings",

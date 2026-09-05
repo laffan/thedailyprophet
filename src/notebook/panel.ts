@@ -18,7 +18,7 @@ import {
   type NotebookEntry,
   type NotebookKind,
 } from "../types";
-import { el } from "../util";
+import { debounce, el } from "../util";
 import { notebookSnapshot } from "../api";
 import type { NoteEditor } from "./editor";
 
@@ -51,6 +51,19 @@ export interface NotebookHost {
   addBookmark: () => void;
   startSnapshot: () => void;
   addNote: () => void;
+  /** Searches the open document for a phrase. */
+  findInDocument: (query: string) => Promise<DocumentHit[]>;
+  /** Scrolls to one of those hits and lights it up. */
+  gotoDocumentHit: (index: number) => void;
+}
+
+/** One occurrence of the search text in the document being read. */
+export interface DocumentHit {
+  i: number;
+  before: string;
+  match: string;
+  after: string;
+  ratio: number;
 }
 
 interface Card {
@@ -90,11 +103,18 @@ export class NotebookPanel {
    */
   private readonly filter = { kinds: new Set<NotebookKind>(), colors: new Set<string>() };
   private readonly filterBar = el("div.nb-filter");
-  private readonly noMatches = el(
-    "p.muted.nb-section-empty",
-    null,
-    "Nothing in the notebook matches that filter.",
-  );
+  /** What the search field holds, and what the document made of it. */
+  private query = "";
+  private hits: DocumentHit[] = [];
+  private readonly searchField = el("input.nb-search", {
+    type: "search",
+    placeholder: "Search the notebook and the page…",
+    spellcheck: false,
+  }) as HTMLInputElement;
+  private readonly found = el("section.nb-section.nb-found");
+  private readonly foundList = el("div.nb-entries");
+  private readonly foundCount = el("span.nb-section-count");
+  private readonly noMatches = el("p.muted.nb-section-empty");
 
   constructor(
     private readonly store: NotebookStore,
@@ -107,7 +127,8 @@ export class NotebookPanel {
         el("span.nb-heading", null, "Notebook"),
         this.countLabel,
       ),
-      // Outside the scroller, so it stays put however far down you are.
+      // Outside the scroller, so they stay put however far down you are.
+      el("div.nb-search-row", null, this.searchField),
       this.filterBar,
       this.body,
       el(
@@ -131,6 +152,42 @@ export class NotebookPanel {
       ),
     );
     this.body.append(this.insertLine);
+
+    const run = debounce(() => void this.search(this.searchField.value), 220);
+    this.searchField.addEventListener("input", run);
+    this.searchField.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      this.searchField.value = "";
+      run.cancel();
+      void this.search("");
+    });
+    this.found.append(
+      el("div.nb-section-head.nb-found-head", null, el("span.nb-section-name", null, "In this page"), this.foundCount),
+      this.foundList,
+    );
+  }
+
+  /** Runs a query against the notebook and the document at the same time. */
+  private async search(raw: string): Promise<void> {
+    const query = raw.trim();
+    if (query === this.query) return;
+    this.query = query;
+    this.hits = [];
+    this.render();
+    if (query.length < 2) {
+      this.host.gotoDocumentHit(-1);
+      return;
+    }
+    let hits: DocumentHit[] = [];
+    try {
+      hits = await this.host.findInDocument(query);
+    } catch {
+      hits = []; // the page did not answer; the notebook results still stand
+    }
+    if (query !== this.query) return; // a later keystroke won the race
+    this.hits = hits;
+    this.render();
   }
 
   render(): void {
@@ -161,7 +218,13 @@ export class NotebookPanel {
       this.renderSection(docId, section, live);
       nodes.push(section.root);
     }
-    if (this.filtering() && !nodes.length) nodes.push(this.noMatches);
+    if (this.filtering() && !nodes.length) {
+      this.noMatches.textContent = this.query
+        ? "Nothing in the notebook matches that search."
+        : "Nothing in the notebook matches that filter.";
+      nodes.push(this.noMatches);
+    }
+    if (this.query) nodes.unshift(this.renderFound());
     reconcile(this.body, [...nodes, this.insertLine]);
 
     for (const [docId, section] of this.sections) {
@@ -199,13 +262,18 @@ export class NotebookPanel {
   // ---- filtering ---------------------------------------------------------
 
   private filtering(): boolean {
-    return this.filter.kinds.size > 0 || this.filter.colors.size > 0;
+    return this.filter.kinds.size > 0 || this.filter.colors.size > 0 || this.query.length > 0;
   }
 
   private matches(entry: NotebookEntry): boolean {
     if (this.filter.kinds.size && !this.filter.kinds.has(entry.kind)) return false;
     if (this.filter.colors.size && !this.filter.colors.has(colorKey(entry, this.host))) {
       return false;
+    }
+    if (this.query) {
+      const needle = this.query.toLowerCase();
+      const hay = `${entry.quote ?? ""}\n${entry.label ?? ""}\n${entry.note}`.toLowerCase();
+      if (!hay.includes(needle)) return false;
     }
     return true;
   }
@@ -293,6 +361,35 @@ export class NotebookPanel {
     this.render();
   }
 
+  /** What the open document itself has to say about the query. */
+  private renderFound(): HTMLElement {
+    this.foundCount.textContent = String(this.hits.length);
+    this.foundList.innerHTML = "";
+    if (!this.hits.length) {
+      this.foundList.append(
+        el("p.muted.nb-section-empty", null, "Nothing on this page matches."),
+      );
+      return this.found;
+    }
+    for (const hit of this.hits) {
+      this.foundList.append(
+        el(
+          "button.nb-hit",
+          { onclick: () => this.host.gotoDocumentHit(hit.i) },
+          el("span.nb-hit-at", null, `${Math.round(hit.ratio * 100)}%`),
+          el(
+            "span.nb-hit-text",
+            null,
+            hit.before,
+            el("mark.nb-hit-mark", null, hit.match),
+            hit.after,
+          ),
+        ),
+      );
+    }
+    return this.found;
+  }
+
   // ---- sections ----------------------------------------------------------
 
   /** The document being read leads; the rest follow by recent activity. */
@@ -307,7 +404,7 @@ export class NotebookPanel {
   private section(docId: string): Section {
     const existing = this.sections.get(docId);
     if (existing) return existing;
-    const caret = el("span.nb-caret", null, "▸");
+    const caret = caretIcon();
     const name = el("span.nb-section-name");
     const count = el("span.nb-section-count");
     const head = el(
@@ -341,7 +438,7 @@ export class NotebookPanel {
 
     section.root.classList.toggle("is-current", isCurrent);
     section.root.classList.toggle("is-collapsed", collapsed);
-    section.caret.textContent = collapsed ? "▸" : "▾";
+    section.caret.classList.toggle("is-open", !collapsed);
     section.name.textContent = page.title || "Untitled document";
     section.count.textContent = String(entries.length);
     section.head.title = page.sourceUrl;
@@ -784,6 +881,15 @@ function colorInk(entry: NotebookEntry, host: NotebookHost): string {
   return entry.kind === "highlight"
     ? HIGHLIGHT_COLORS[highlightInkOf(entry, host)]
     : (ENTRY_COLORS[entry.color] ?? ENTRY_COLORS.ink);
+}
+
+/** The section twirl. An icon rather than a glyph, so it can be sized. */
+function caretIcon(): HTMLElement {
+  const span = el("span.nb-caret");
+  span.innerHTML =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>';
+  return span;
 }
 
 function clip(text: string, max: number): string {

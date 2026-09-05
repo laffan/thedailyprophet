@@ -13,6 +13,8 @@ export interface ReaderJump {
   page: string;
   ratio?: number;
   highlightId?: string;
+  /** Put the target in the middle of the window rather than at the top. */
+  center?: boolean;
 }
 
 export type Route =

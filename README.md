@@ -60,7 +60,9 @@ Built on [Tauri 2.0](https://v2.tauri.app).
   format maps onto ours one-to-one.
 - **Library shelf** — covers (from `og:image` or the page's best image, with
   a generated "book spine" fallback), reading progress, rename / delete /
-  export, drag-and-drop import.
+  export, drag-and-drop import. Pin a document from its ⋯ menu to hold it at
+  the top of the shelf; the pin rides along with reading state, so it
+  follows you to your other devices.
 - **Reading state** — scroll position is saved continuously and restored on
   reopen (robust to reflows: position is stored both absolutely and as a
   ratio).
@@ -92,8 +94,9 @@ Built on [Tauri 2.0](https://v2.tauri.app).
   document. It holds four kinds of thing:
   - **Highlights** — everything you have highlighted, listed where it falls
     in the text, each with room for a note.
-  - **Bookmarks** — a coloured arrow in the page's left margin that can be
-    dragged to move the place it marks, plus a card for its note and colour.
+  - **Bookmarks** — a coloured arrow in the page's left margin, dropped at
+    the middle of what you are looking at and dragged to move it, plus a
+    card for its note and colour.
     Its label follows the heading it lands under until you rename it, after
     which the name you gave it is kept wherever you drag it.
   - **Snapshots** — the cursor becomes a crosshair and you drag a rectangle
@@ -109,10 +112,16 @@ Built on [Tauri 2.0](https://v2.tauri.app).
 
   Highlights, bookmarks and snapshots sit in the order they occur in the
   text, and clicking one scrolls there; clicking one in another document's
-  section opens that document at the right place. A bar pinned above the
-  list filters by kind and by colour — showing only the kinds and colours
-  the notebook actually holds, so the colours are a way of finding things
-  again rather than only a way of marking them.
+  section opens that document at the right place. A search field and a
+  filter bar sit pinned above the list: the search runs over the notebook
+  and the open page at once, so a phrase you remember reading is as findable
+  as one you happened to highlight, and the filter offers only the kinds and
+  colours the notebook actually holds — which is what makes the colours a
+  way of finding things again rather than only a way of marking them.
+
+  The notebook exports two ways: as `Notebook.dailyprophet`, which another
+  copy of the app can merge back in, or as a zip of Markdown — one file per
+  document, with an `images/` folder for the snapshots they reference.
 - **Annotation export** — save a document's highlights and bookmarks as
   Markdown, JSON, CSV or plain text, from the shelf's ⋯ menu or the reader.
 - **Portable documents** — export any story as a `.prophet` file and open it

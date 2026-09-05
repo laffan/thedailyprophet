@@ -205,12 +205,12 @@ fn merge_doc(dir: &Path, remote: NotebookDoc) -> Result<bool, String> {
 
 // ---- commands -------------------------------------------------------------
 
-#[tauri::command]
-pub fn notebook_load(app: AppHandle) -> Result<Vec<NotebookDoc>, String> {
-    let root = notebook_dir(&app)?;
-    ensure_dirs(&root)?;
+/// Every page on disk, most recently touched first. Directory order is
+/// whatever the filesystem feels like, and an export's file names depend on
+/// which document is read first.
+fn read_all_docs(dir: &Path) -> Vec<NotebookDoc> {
     let mut out = Vec::new();
-    if let Ok(entries) = fs::read_dir(documents_dir(&root)) {
+    if let Ok(entries) = fs::read_dir(documents_dir(dir)) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) == Some("json") {
@@ -220,7 +220,15 @@ pub fn notebook_load(app: AppHandle) -> Result<Vec<NotebookDoc>, String> {
             }
         }
     }
-    Ok(out)
+    out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(a.doc_id.cmp(&b.doc_id)));
+    out
+}
+
+#[tauri::command]
+pub fn notebook_load(app: AppHandle) -> Result<Vec<NotebookDoc>, String> {
+    let root = notebook_dir(&app)?;
+    ensure_dirs(&root)?;
+    Ok(read_all_docs(&root))
 }
 
 #[tauri::command]
@@ -290,6 +298,179 @@ pub fn notebook_export(app: AppHandle, dest: String) -> Result<String, String> {
 #[tauri::command]
 pub fn notebook_import(app: AppHandle, path: String) -> Result<u32, String> {
     merge_from_zip(&app, Path::new(&path))
+}
+
+
+// ---- exporting as Markdown ------------------------------------------------
+
+/// A file name a person can recognise, kept safe for any filesystem.
+fn slug(title: &str, fallback: &str) -> String {
+    let mut out: String = title
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => ' ',
+            c if c.is_control() => ' ',
+            c => c,
+        })
+        .collect();
+    out = out.split_whitespace().collect::<Vec<_>>().join(" ");
+    if out.chars().count() > 70 {
+        out = out.chars().take(70).collect::<String>().trim_end().to_string();
+    }
+    if out.is_empty() || out.starts_with('.') {
+        out = fallback.to_string();
+    }
+    out
+}
+
+fn text_of(entry: &Value, key: &str) -> String {
+    entry.get(key).and_then(|v| v.as_str()).unwrap_or("").trim().to_string()
+}
+
+fn percent(entry: &Value) -> u64 {
+    let ratio = entry.get("ratio").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    (ratio.clamp(0.0, 1.0) * 100.0).round() as u64
+}
+
+/// The order the sidebar shows: by page, then by where in the page it sits.
+fn ordered(entries: &[Value]) -> Vec<&Value> {
+    let mut live: Vec<&Value> = entries
+        .iter()
+        .filter(|e| !e.get("deleted").and_then(|v| v.as_bool()).unwrap_or(false))
+        .collect();
+    live.sort_by(|a, b| {
+        let ka = a.get("ratio").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let kb = b.get("ratio").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        text_of(a, "page")
+            .cmp(&text_of(b, "page"))
+            .then(ka.partial_cmp(&kb).unwrap_or(std::cmp::Ordering::Equal))
+            .then(entry_stamp(a).cmp(&entry_stamp(b)))
+    });
+    live
+}
+
+/// One document's page of the notebook, as Markdown.
+fn doc_to_markdown(doc: &NotebookDoc) -> String {
+    let entries = ordered(&doc.entries);
+    let mut out = String::new();
+    out.push_str(&format!("# {}\n\n", if doc.title.is_empty() { "Untitled document" } else { &doc.title }));
+    if !doc.source_url.is_empty() {
+        out.push_str(&format!("- Source: {}\n", doc.source_url));
+    }
+    out.push_str(&format!(
+        "- {} entr{}\n\n",
+        entries.len(),
+        if entries.len() == 1 { "y" } else { "ies" }
+    ));
+
+    for entry in entries {
+        let kind = text_of(entry, "kind");
+        let at = percent(entry);
+        let note = text_of(entry, "note");
+        match kind.as_str() {
+            "highlight" => {
+                out.push_str(&format!("## Highlight — {at}%\n\n"));
+                for line in text_of(entry, "quote").lines() {
+                    out.push_str(&format!("> {line}\n"));
+                }
+                out.push('\n');
+            }
+            "bookmark" => {
+                let label = text_of(entry, "label");
+                out.push_str(&format!(
+                    "## Bookmark — {at}%{}\n\n",
+                    if label.is_empty() { String::new() } else { format!(" — {label}") }
+                ));
+            }
+            "snapshot" => {
+                out.push_str(&format!("## Snapshot — {at}%\n\n"));
+                out.push_str(&format!(
+                    "![Snapshot at {at}%](images/{}.png)\n\n",
+                    text_of(entry, "id")
+                ));
+            }
+            _ => out.push_str("## Note\n\n"),
+        }
+        if !note.is_empty() {
+            out.push_str(&note);
+            out.push_str("\n\n");
+        }
+    }
+    out
+}
+
+/// Writes the notebook as a zip of Markdown files plus the snapshot images
+/// they reference — the readable counterpart to `.dailyprophet`, which is
+/// the one that can be merged back in.
+#[tauri::command]
+pub fn notebook_export_markdown(app: AppHandle, dest: String) -> Result<String, String> {
+    let mut path = PathBuf::from(&dest);
+    if path.extension().and_then(|e| e.to_str()) != Some("zip") {
+        path.set_extension("zip");
+    }
+    export_markdown_to(&notebook_dir(&app)?, &path)
+}
+
+fn export_markdown_to(dir: &Path, path: &Path) -> Result<String, String> {
+    ensure_dirs(dir)?;
+    let docs = read_all_docs(dir);
+    if docs.is_empty() {
+        return Err("the notebook is empty".into());
+    }
+    let snaps = snapshots_dir(dir);
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("could not create folder: {e}"))?;
+    }
+    let tmp = path.with_extension("zip.part");
+    let file = File::create(&tmp).map_err(|e| format!("could not create file: {e}"))?;
+    let mut zw = ZipWriter::new(file);
+    let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+
+    let mut used: Vec<String> = Vec::new();
+    let mut wanted_images: Vec<String> = Vec::new();
+    for doc in &docs {
+        if doc.entries.iter().all(|e| {
+            e.get("deleted").and_then(|v| v.as_bool()).unwrap_or(false)
+        }) {
+            continue; // nothing left on this page
+        }
+        let base = slug(&doc.title, &format!("Document {}", &doc.doc_id[..8.min(doc.doc_id.len())]));
+        let mut name = format!("{base}.md");
+        // Two documents can share a title; two files cannot share a name.
+        let mut n = 2;
+        while used.contains(&name) {
+            name = format!("{base} ({n}).md");
+            n += 1;
+        }
+        used.push(name.clone());
+
+        for entry in ordered(&doc.entries) {
+            if text_of(entry, "kind") == "snapshot" {
+                wanted_images.push(text_of(entry, "id"));
+            }
+        }
+        zw.start_file(&name, opts).map_err(|e| e.to_string())?;
+        zw.write_all(doc_to_markdown(doc).as_bytes())
+            .map_err(|e| e.to_string())?;
+    }
+
+    for id in wanted_images {
+        if safe_id(&id).is_err() {
+            continue;
+        }
+        let Ok(bytes) = fs::read(snaps.join(format!("{id}.png"))) else { continue };
+        zw.start_file(format!("images/{id}.png"), opts)
+            .map_err(|e| e.to_string())?;
+        zw.write_all(&bytes).map_err(|e| e.to_string())?;
+    }
+
+    zw.finish().map_err(|e| format!("could not finish the export: {e}"))?;
+    fs::rename(&tmp, path).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        format!("could not write the export: {e}")
+    })?;
+    Ok(path.to_string_lossy().into_owned())
 }
 
 // ---- the .dailyprophet file ----------------------------------------------
@@ -549,6 +730,92 @@ mod tests {
         assert_eq!(merged.entries[0]["deleted"], json!(true));
         assert_eq!(merged.entries[1]["note"], json!("from the Mac"));
         assert_eq!(merged.updated_at, now);
+    }
+
+    #[test]
+    fn markdown_export_writes_a_file_per_document_and_its_images() {
+        let dir = Scratch::new("md");
+        write_doc(
+            dir.path(),
+            &NotebookDoc {
+                doc_id: "aaa".into(),
+                title: "The Elevator Story".into(),
+                source_url: "https://example.com/lift".into(),
+                collapsed: false,
+                updated_at: 5,
+                entries: vec![
+                    json!({ "id": "s1", "kind": "snapshot", "ratio": 0.5, "note": "the diagram",
+                            "createdAt": 3, "updatedAt": 3 }),
+                    json!({ "id": "h1", "kind": "highlight", "ratio": 0.1, "note": "why it works",
+                            "quote": "a room that moves", "createdAt": 1, "updatedAt": 1 }),
+                    json!({ "id": "b1", "kind": "bookmark", "ratio": 0.25, "note": "",
+                            "label": "Counterweights", "createdAt": 2, "updatedAt": 2 }),
+                    json!({ "id": "gone", "kind": "note", "deleted": true, "updatedAt": 9 }),
+                ],
+            },
+        )
+        .unwrap();
+        // A second document with the same title, to prove names do not collide.
+        write_doc(
+            dir.path(),
+            &NotebookDoc {
+                doc_id: "bbb".into(),
+                title: "The Elevator Story".into(),
+                source_url: "https://example.com/other".into(),
+                collapsed: false,
+                updated_at: 4,
+                entries: vec![entry("n1", 1, "just a note")],
+            },
+        )
+        .unwrap();
+        fs::write(snapshots_dir(dir.path()).join("s1.png"), b"png bytes").unwrap();
+        // An image no entry points at should not be dragged along.
+        fs::write(snapshots_dir(dir.path()).join("orphan.png"), b"png bytes").unwrap();
+
+        let out = dir.path().join("Notebook.zip");
+        export_markdown_to(dir.path(), &out).unwrap();
+
+        let mut zip = ZipArchive::new(File::open(&out).unwrap()).unwrap();
+        let mut names: Vec<String> = (0..zip.len())
+            .map(|i| zip.by_index(i).unwrap().name().to_string())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![
+                "The Elevator Story (2).md",
+                "The Elevator Story.md",
+                "images/s1.png",
+            ]
+        );
+
+        let mut md = String::new();
+        zip.by_name("The Elevator Story.md")
+            .unwrap()
+            .read_to_string(&mut md)
+            .unwrap();
+        // Entries come out in the order they occur in the text…
+        let order: Vec<&str> = md
+            .lines()
+            .filter(|l| l.starts_with("## "))
+            .collect();
+        assert_eq!(
+            order,
+            vec!["## Highlight — 10%", "## Bookmark — 25% — Counterweights", "## Snapshot — 50%"]
+        );
+        assert!(md.contains("> a room that moves"));
+        assert!(md.contains("why it works"));
+        assert!(md.contains("![Snapshot at 50%](images/s1.png)"));
+        assert!(md.contains("- Source: https://example.com/lift"));
+        // …and a deleted one is not an entry at all.
+        assert!(!md.contains("## Note"));
+        assert!(md.contains("- 3 entries"));
+    }
+
+    #[test]
+    fn markdown_export_refuses_an_empty_notebook() {
+        let dir = Scratch::new("md-empty");
+        assert!(export_markdown_to(dir.path(), &dir.path().join("out.zip")).is_err());
     }
 
     #[test]
