@@ -70,7 +70,18 @@ jobs:
           # __VERSION__ is replaced with the version in tauri.conf.json.
           tagName: v__VERSION__
           releaseName: "The Daily Prophet v__VERSION__"
-          releaseBody: "Installers for macOS (Apple silicon and Intel) are attached below. The builds are not code-signed, so macOS will warn the first time you open the app."
+          releaseBody: |
+            ## Downloads
+
+            - **macOS:** `AppleSilicon.dmg` for M-series Macs, `MacIntel.dmg` for Intel Macs.
+
+            ## Opening the app on macOS
+
+            These builds are not signed with an Apple Developer certificate, so macOS blocks them the first time. Drag the app to Applications, then run this once in Terminal:
+
+            ```
+            xattr -cr "/Applications/The Daily Prophet.app"
+            ```
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
